@@ -1,0 +1,16 @@
+/target/
+/server/target/
+/game/node_modules/
+/game/dist/
+/game/src-tauri/target/
+/game/src-tauri/gen/
+/game_web/node_modules/
+/game_web/dist/
+/sdk/rust/target/
+/sdk/csharp/**/bin/
+/sdk/csharp/**/obj/
+/sdk/godot/.godot/
+.DS_Store
+.env
+.env.*
+!.env.example
