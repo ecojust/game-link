@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">GameLink</title>
+  <desc id="desc">GameLink logo on the site's dark background.</desc>
+  <rect width="1200" height="400" rx="24" fill="#101511"/>
+  <g stroke="#C4ED73" stroke-width="12" stroke-linejoin="round">
+    <path d="M190 52 315 177 190 302 65 177 190 52Z"/>
+    <path d="M321 101 398 178 321 255 244 178 321 101Z"/>
+  </g>
+  <path d="m321 157 21 21-21 21-21-21 21-21Z" fill="#EF9B58"/>
+  <g fill="#F0F0E6" font-family="Arial, Helvetica, sans-serif" font-size="126" font-weight="800" letter-spacing="18">
+    <text x="490" y="177">GAME</text>
+    <text x="490" y="322" letter-spacing="44">LINK</text>
+  </g>
+</svg>
