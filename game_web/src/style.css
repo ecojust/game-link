@@ -237,3 +237,8 @@ button:focus-visible,input:focus-visible { outline: 2px solid var(--lime); outli
 @media(max-width:430px) {
   .hub-intro h1 { font-size:43px; }.room-card-bottom { font-size:8px; }.game-poster { height:155px; }.poster-racer .poster-track { width:345px; height:138px; border-width:22px; }.poster-racer>strong { font-size:28px; }.race-topline { gap:7px; }.race-stats>div { padding:6px; }.race-stats strong { font-size:10px; }.race-network { font-size:7px; }.race-canvas { min-height:205px; object-fit:contain; }
 }
+
+/* FC battle card: brick courtyard, grass islands and converging cars. */
+.poster-racer{background:repeating-linear-gradient(0deg,transparent 0 14px,#191d26 14px 16px),repeating-linear-gradient(90deg,#71642f 0 30px,#26252c 30px 32px)}
+.poster-racer .poster-track{border:4px solid #d6d7c4;border-radius:0;background:#70944d;width:110px;height:72px;left:24%;top:64%;transform:translate(-50%,-50%);box-shadow:150px -50px 0 -4px #70944d,150px -50px 0 0 #d6d7c4}
+.poster-track i,.poster-track b{display:none}.poster-racer .car-one{left:34%;top:35%;transform:rotate(32deg);background:#e8e9e4;color:#23477f;border-radius:2px}.poster-racer .car-two{right:23%;bottom:35%;transform:rotate(-146deg);background:#df687f;border-radius:2px}

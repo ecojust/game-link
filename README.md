@@ -9,7 +9,7 @@ Gameplay uses WebRTC peer-to-peer (P2P) DataChannels when a direct connection su
 | Game ID       | Game                                                    | Players |
 | ------------- | ------------------------------------------------------- | ------- |
 | `tank-arena`  | Multiplayer tank arena                                  | 2–16    |
-| `fc-mini-4wd` | FC-inspired multiplayer Mini 4WD racing, **激斗四驱车** | 2–16    |
+| `fc-mini-4wd` | Three.js FC-style car combat, **激斗四驱车** | 1–16    |
 
 The browser hub lists active rooms with their game name, game ID, and player count, and lets players create or join a game-specific room. New players can join while a match is running.
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { GameLinkClient } from '../../sdk/js/gamelink.js'
 import type { GameLinkMessage, GameLinkRoom } from '../../sdk/js/gamelink.js'
-import FourWheelGame from './FourWheelGame.vue'
+const FourWheelGame = defineAsyncComponent(() => import('./FourWheelGame.vue'))
 
 type Member = { id: string; name: string; virtual_ip: string; endpoint: string }
 type Room = GameLinkRoom
@@ -11,7 +11,7 @@ type Bullet = { id: string; owner: string; x: number; y: number; angle: number; 
 
 const GAME_CATALOG = [
   { id: 'tank-arena', title: '多人坦克竞技场', subtitle: 'IRON FIELD / REAL-TIME BATTLE', description: '占领掩体，和队友在战场里正面对决。', players: '2–16 人', tag: '即时对战', glyph: 'T', theme: 'tank' },
-  { id: 'fc-mini-4wd', title: '激斗四驱车', subtitle: 'FAMILY CIRCUIT / FC CLASSIC', description: '压住油门冲过弯心，用涡轮争夺三圈冠军。', players: '2–16 人', tag: 'FC 经典改编', glyph: '4WD', theme: 'racer' },
+  { id: 'fc-mini-4wd', title: '激斗四驱车', subtitle: 'GEKITOTSU / 4WD BATTLE', description: '车头冲撞、击退敌车，重返 FC 的俯视战场。支持合作闯关和玩家对战。', players: '1–16 人', tag: 'FC 冲撞对战', glyph: '4WD', theme: 'racer' },
 ]
 const WIDTH = 1000
 const HEIGHT = 620
@@ -359,7 +359,7 @@ function frame(now: number) {
   animationFrame = requestAnimationFrame(frame)
   const dt = Math.min((now - lastFrame) / 1000 || 0, 0.045)
   lastFrame = now
-  if (phase.value === 'battle') tick(dt)
+  if (phase.value === 'battle' && room.value?.game_id === 'tank-arena') tick(dt)
   drawArena()
 }
 
@@ -495,6 +495,7 @@ function drawTank(ctx: CanvasRenderingContext2D, tank: Tank, mine: boolean) {
 }
 
 function onKeyDown(event: KeyboardEvent) {
+  if (room.value?.game_id !== 'tank-arena' || phase.value !== 'battle') return
   const key = event.key.toLowerCase()
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) event.preventDefault()
   keys.add(key)
@@ -567,7 +568,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="game-shell">
+  <main class="game-shell" :class="{ 'fc-playing': phase === 'battle' && room?.game_id === 'fc-mini-4wd' }">
     <header class="masthead">
       <div class="brand"><img class="brand-logo" src="/gamelink-logo.svg" alt="GameLink" width="156" height="52" /></div>
       <div class="server-indicator"><span></span>SERVER / 8088</div>
@@ -603,7 +604,7 @@ onBeforeUnmount(() => {
         <div class="game-card-grid">
           <article v-for="game in GAME_CATALOG" :key="game.id" class="game-card" :class="`game-${game.theme}`">
             <div class="game-poster" :class="`poster-${game.theme}`" aria-hidden="true">
-              <template v-if="game.theme === 'racer'"><div class="poster-track"><i></i><b></b></div><span class="poster-car car-one">4WD</span><span class="poster-car car-two">4WD</span><small>GO! GO! MINI RACER</small><strong>激斗<br />四驱车</strong></template>
+              <template v-if="game.theme === 'racer'"><div class="poster-track"><i></i><b></b></div><span class="poster-car car-one">4WD</span><span class="poster-car car-two">4WD</span><small>RAM! CRASH! 4WD BATTLE</small><strong>激斗<br />四驱车</strong></template>
               <template v-else><div class="poster-grid"></div><div class="poster-tank"><i></i><b></b></div><span class="poster-lock">ARENA / 01</span><strong>铁锈峡谷</strong></template>
               <span class="poster-index">{{ game.glyph }}</span>
             </div>
@@ -615,7 +616,7 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="room-screen">
-      <div class="room-toolbar"><div><div class="kicker"><span></span> {{ activeGame?.subtitle || room?.game_id }}</div><h1>{{ activeGame?.title || room?.game_id }}<i>.</i></h1><p>{{ room?.game_id === 'fc-mini-4wd' ? '和房间里的车手一起冲过三圈赛道。' : phase === 'lobby' ? '分享房间号，所有人准备就绪后由房主开始。' : phase === 'battle' ? '击中对手，留在战场上。' : gameMessage }}</p></div><button class="room-code" @click="copyRoomCode"><small>作战房间 · 点击复制</small><strong>{{ room?.code }}</strong><span>▢</span></button><button class="exit-button" @click="leaveRoomFromButton">离开房间 ↗</button></div>
+      <div class="room-toolbar"><div><div class="kicker"><span></span> {{ activeGame?.subtitle || room?.game_id }}</div><h1>{{ activeGame?.title || room?.game_id }}<i>.</i></h1><p>{{ room?.game_id === 'fc-mini-4wd' ? '用车头击破敌车，保护侧面与车尾。' : phase === 'lobby' ? '分享房间号，所有人准备就绪后由房主开始。' : phase === 'battle' ? '击中对手，留在战场上。' : gameMessage }}</p></div><button class="room-code" @click="copyRoomCode"><small>作战房间 · 点击复制</small><strong>{{ room?.code }}</strong><span>▢</span></button><button class="exit-button" @click="leaveRoomFromButton">离开房间 ↗</button></div>
 
       <div v-if="phase === 'lobby'" class="lobby-grid">
         <section class="roster-card"><div class="panel-heading"><div><small>DEPLOYMENT ROSTER</small><h2>作战成员 <span>{{ members.length }} / 16</span></h2></div><span class="sync-label" :class="networkModeClass"><i></i>{{ networkMode }} · P2P {{ connectedPeerCount }} / 转发 {{ relayPeerCount }}</span></div><div class="roster-list"><div v-for="(member, index) in membersSorted" :key="member.id" class="roster-row" :class="{ mine: member.id === self?.id }"><span class="player-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="player-badge" :style="{ '--paint': PALETTE[index % PALETTE.length] }">{{ member.name.slice(0, 1).toUpperCase() }}</span><div class="player-copy"><strong>{{ member.name }}<small v-if="member.id === self?.id">你</small></strong><span>{{ member.id === room?.host_id ? '房主 · 作战指挥' : '作战成员' }}</span></div><code class="peer-state" :class="{ linked: peerStates[member.id] === 'connected', relayed: peerStates[member.id] === 'relay' }">{{ peerStatusLabel(member.id) }}</code><span class="ready-pill" :class="{ ready: member.id === self?.id ? selfReady : readyMap[member.id] }"><i></i>{{ member.id === self?.id ? selfReady ? '已准备' : '待命中' : readyMap[member.id] ? '已准备' : '等待准备' }}</span></div><div v-if="members.length < 2" class="recruit-note"><span>⌁</span><div><strong>还需要一位对手</strong><p>把房间号发给朋友。至少两位玩家才能开始。</p></div></div></div><div class="roster-actions"><button class="ready-button" :class="{ active: selfReady }" :disabled="!allPeerPathsReady" @click="toggleReady">{{ selfReady ? '取消准备' : '我已准备' }} <span>{{ selfReady ? '✓' : '＋' }}</span></button><button v-if="isHost" class="start-button" :disabled="!canStart" @click="startBattle">开始对战 <span>→</span></button><div v-else class="host-wait"><span v-if="!allPeerPathsReady">正在建立 P2P / 服务器转发连接…</span><span v-else>等待房主开始 · {{ readyCount }}/{{ members.length }} 已准备</span></div></div></section>
