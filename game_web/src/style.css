@@ -242,3 +242,87 @@ button:focus-visible,input:focus-visible { outline: 2px solid var(--lime); outli
 .poster-racer{background:repeating-linear-gradient(0deg,transparent 0 14px,#191d26 14px 16px),repeating-linear-gradient(90deg,#71642f 0 30px,#26252c 30px 32px)}
 .poster-racer .poster-track{border:4px solid #d6d7c4;border-radius:0;background:#70944d;width:110px;height:72px;left:24%;top:64%;transform:translate(-50%,-50%);box-shadow:150px -50px 0 -4px #70944d,150px -50px 0 0 #d6d7c4}
 .poster-track i,.poster-track b{display:none}.poster-racer .car-one{left:34%;top:35%;transform:rotate(32deg);background:#e8e9e4;color:#23477f;border-radius:2px}.poster-racer .car-two{right:23%;bottom:35%;transform:rotate(-146deg);background:#df687f;border-radius:2px}
+
+/* Both games share the same full-window shell, banner, menu and controls. */
+body:has(.tank-playing){overflow:hidden;overscroll-behavior:none}
+.tank-playing>.masthead,.tank-playing .room-toolbar{display:none}
+.tank-playing,.tank-playing *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.tank-playing .toast{z-index:110}
+.standalone-join { display:flex;align-items:flex-end;gap:10px;max-width:520px;margin:22px 0 0 auto;padding:15px;border:1px solid #39463b;background:#151d18; }
+.standalone-join label { display:grid;flex:1;gap:8px;color:#a4b09c;font:9px var(--mono);letter-spacing:.08em; }
+.standalone-join .code-input { height:44px; }
+.standalone-join .join-button { min-height:44px;min-width:128px; }
+.brand { text-decoration:none; }
+@media (max-width:520px) { .standalone-join { display:grid;grid-template-columns:1fr;margin-top:16px; }.standalone-join .join-button { width:100%; } }
+
+.launch-status { padding:48px; color:#e7e9df; }.launch-status a { color:#c4ed73; }
+
+
+.masthead-actions { margin-left:auto; display:flex; align-items:center; gap:18px; }
+.masthead-actions .version-label { margin-left:0; }
+.info-button { width:30px;height:30px;display:grid;place-items:center;border:1px solid #52604d;border-radius:50%;background:transparent;color:#d2e5ae;cursor:pointer;transition:background .18s,border-color .18s,transform .18s; }
+.info-button span { font:600 16px Georgia,serif; }
+.info-button:hover { background:#c8ed7220;border-color:var(--lime);transform:translateY(-1px); }
+.integration-dialog { width:min(580px,calc(100vw - 28px));max-height:min(86vh,800px);padding:0;border:1px solid #56644c;border-radius:12px;background:#151c17;color:#eef0df;box-shadow:0 28px 100px #000b; }
+.integration-dialog::backdrop { background:#070b09c9;backdrop-filter:blur(5px); }
+.integration-heading { display:flex;justify-content:space-between;align-items:flex-start;padding:25px 28px 0; }
+.integration-kicker { color:#b2d46d;font:10px var(--mono);letter-spacing:.14em; }
+.integration-heading h2 { margin:9px 0 0;font-size:25px;font-weight:650;letter-spacing:.02em; }
+.dialog-close { width:34px;height:34px;border:1px solid #455045;border-radius:50%;background:transparent;color:#d9dfcc;font-size:23px;line-height:1;cursor:pointer; }
+.integration-lead,.integration-note { margin:14px 28px 20px;color:#acb5a7;font-size:13px;line-height:1.8; }
+.integration-steps { display:grid;gap:15px;margin:0 28px;padding-left:23px;color:#b6d879; }
+.integration-steps li { padding-left:3px; }
+.integration-steps b,.integration-steps span { display:block; }
+.integration-steps b { color:#e9ecd9;font-size:13px;margin-bottom:3px; }
+.integration-steps span { color:#aab3a5;font-size:12px;line-height:1.7; }
+.integration-dialog code { color:#d1e994;font-family:var(--mono);font-size:.92em; }
+.integration-code-label { margin:21px 28px 7px;color:#899684;font:9px var(--mono);letter-spacing:.12em;text-transform:uppercase; }
+.integration-code { margin:0 28px;padding:14px 16px;overflow:auto;border:1px solid #343e34;border-radius:7px;background:#0c110e;color:#d8e6c7;font:11px/1.7 var(--mono);white-space:pre; }
+.integration-note { margin-top:14px;margin-bottom:8px;font-size:11px; }
+.integration-doc-link { display:inline-block;margin:0 28px 25px;color:#c4e879;font-size:12px;text-decoration:none; }
+.integration-doc-link:hover { text-decoration:underline; }
+@media(max-width:760px) { .masthead-actions { gap:11px; }.info-button { width:32px;height:32px; }.integration-heading { padding:22px 20px 0; }.integration-lead,.integration-note { margin-right:20px;margin-left:20px; }.integration-steps { margin-right:20px;margin-left:20px; }.integration-code-label,.integration-code { margin-right:20px;margin-left:20px; }.integration-doc-link { margin-left:20px; } }
+
+/* Keep the developer guide scrollbar visible, slim, and in the site palette. */
+.integration-dialog {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #80994f #202820;
+  scrollbar-gutter: stable;
+}
+.integration-dialog::-webkit-scrollbar,
+.integration-code::-webkit-scrollbar { width: 9px; height: 9px; }
+.integration-dialog::-webkit-scrollbar-track,
+.integration-code::-webkit-scrollbar-track { background: #202820; border-radius: 99px; }
+.integration-dialog::-webkit-scrollbar-thumb,
+.integration-code::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 2px solid #202820;
+  border-radius: 99px;
+  background: linear-gradient(180deg, #b9d979, #788f4b);
+}
+.integration-dialog::-webkit-scrollbar-thumb:hover,
+.integration-code::-webkit-scrollbar-thumb:hover { background: #d1ed91; }
+.integration-dialog::-webkit-scrollbar-corner,
+.integration-code::-webkit-scrollbar-corner { background: transparent; }
+.integration-code { scrollbar-width: thin; scrollbar-color: #667a46 #171e18; }
+.integration-code::-webkit-scrollbar-track { background: #171e18; }
+.integration-code::-webkit-scrollbar-thumb { border-color: #171e18; background: #71864d; }
+.integration-code::-webkit-scrollbar-thumb:hover { background: #b9d979; }
+
+
+/* Prevent mobile browsers from auto-resizing text; keep pinch zoom available. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+.name-dialog { width:min(430px,calc(100vw - 28px));padding:0;border:1px solid #56644c;border-radius:12px;background:#151c17;color:#eef0df;box-shadow:0 28px 100px #000b; }
+.name-dialog::backdrop { background:#070b09c9;backdrop-filter:blur(5px); }
+.name-dialog-form { padding:23px 25px 25px; }
+.name-dialog-heading { display:flex;align-items:flex-start;justify-content:space-between;gap:12px; }
+.name-dialog-heading h2 { margin:9px 0 0;font-size:21px;font-weight:650; }
+.name-dialog-copy { margin:12px 0 20px;color:#acb5a7;font-size:13px;line-height:1.7; }
+.name-dialog-label { display:block;margin-bottom:7px;color:#aab3a5;font-size:12px; }
+.name-dialog-input { width:100%;height:48px;padding:0 13px;border:1px solid #52604d;border-radius:6px;outline:none;background:#0c110e;color:#eef0df;font-size:16px; }
+.name-dialog-input:focus { border-color:#b9d979;box-shadow:0 0 0 3px #b9d97924; }
+.name-dialog-submit { display:flex;align-items:center;justify-content:space-between;width:100%;height:46px;margin-top:15px;padding:0 14px;border:1px solid #b9d979;border-radius:6px;background:#c4ed73;color:#182016;font-size:13px;font-weight:700;cursor:pointer; }
+.name-dialog-submit:hover { background:#d2f391; }
+@media(max-width:520px) { .name-dialog-form { padding:20px; }.name-dialog-heading h2 { font-size:19px; } }

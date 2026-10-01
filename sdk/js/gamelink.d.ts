@@ -16,6 +16,8 @@ export interface GameLinkRoom {
 export interface GameLinkJoinResponse {
   room: GameLinkRoom
   self_member: GameLinkMember
+  resume_token: string
+  handoff_token?: string
 }
 
 export interface GameLinkMessage<T = unknown> {
@@ -45,6 +47,11 @@ export interface GameLinkClientOptions {
 
 export class GameLinkClient {
   constructor(options: GameLinkClientOptions)
+  static fromLocation(options?: Partial<GameLinkClientOptions>): GameLinkClient
+  createLaunchUrl(entryUrl: string): Promise<string>
+  joinFromLocation(): Promise<GameLinkJoinResponse>
+  serverUrl: string
+  gameId: string
   room: GameLinkRoom | null
   selfMember: GameLinkMember | null
   members: GameLinkMember[]

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import type { GameLinkClient, GameLinkMember, GameLinkMessage, GameLinkRoom } from '../../sdk/js/gamelink.js'
-import { BattleAudio } from './four-wheel/audio'
-import { BattleRenderer } from './four-wheel/renderer'
-import { BattleSimulation, createWorld, syncDrivers, idleInput, normalizeInput, moveCar, makeMap, STAGES } from './four-wheel/simulation'
-import type { Car, Input, Mode, World } from './four-wheel/simulation'
-import './four-wheel/battle.css'
+import type { GameLinkClient, GameLinkMember, GameLinkMessage, GameLinkRoom } from '../../../../sdk/js/gamelink.js'
+import { BattleAudio } from '../shared/audio'
+import { BattleRenderer } from './renderer'
+import { BattleSimulation, createWorld, syncDrivers, idleInput, normalizeInput, moveCar, makeMap, STAGES } from './simulation'
+import type { Car, Input, Mode, World } from './simulation'
+import '../shared/battle.css'
 
 const props = defineProps<{ client: GameLinkClient; room: GameLinkRoom; self: GameLinkMember; members: GameLinkMember[]; peerStates: Record<string, string>; localIce: string; remoteIce: string; connectionLabel: string }>()
 defineEmits<{ leave: [] }>()

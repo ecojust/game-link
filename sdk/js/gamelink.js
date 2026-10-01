@@ -9,7 +9,7 @@ const DEFAULT_ICE_SERVERS = [
  */
 export class GameLinkClient {
   constructor({
-    serverUrl = '',
+    serverUrl = new URL(import.meta.url).origin,
     gameId,
     playerName,
     iceServers = DEFAULT_ICE_SERVERS,
@@ -39,6 +39,7 @@ export class GameLinkClient {
     this.timers = []
     this.polling = false
     this.disposed = false
+    this.resuming = false
     this.loggedConnections = new WeakSet()
   }
 
@@ -50,6 +51,35 @@ export class GameLinkClient {
       listeners.delete(listener)
       if (listeners.size === 0) this.listeners.delete(eventName)
     }
+  }
+
+  static fromLocation(options = {}) {
+    const params = new URL(window.location.href).searchParams
+    const gameId = params.get('gameid')
+    const playerName = params.get('username')
+    if (!gameId || !playerName?.trim() || !params.get('room')) {
+      throw new Error('链接缺少 gameid、room 或 username，请从平台首页进入游戏。')
+    }
+    return new GameLinkClient({ ...options, gameId, playerName })
+  }
+
+  async createLaunchUrl(entryUrl) {
+    const url = new URL(entryUrl, window.location.href)
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('游戏入口必须为 HTTP(S) 地址')
+    const result = await this._request('/v1/rooms', 'POST', {
+      game_id: this.gameId, player_name: this.playerName, create_only: true,
+    })
+    url.search = new URLSearchParams({
+      gameid: this.gameId, room: result.room.code, username: this.playerName,
+    }).toString()
+    url.hash = ''
+    return url.href
+  }
+
+  async joinFromLocation() {
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('gameid') !== this.gameId) throw new Error('游戏 ID 不匹配')
+    return this.joinRoom(url.searchParams.get('room'))
   }
 
   async createRoom() {
@@ -64,22 +94,46 @@ export class GameLinkClient {
   async joinRoom(code) {
     const roomCode = String(code || '').trim().toUpperCase()
     if (!roomCode) throw new Error('room code is required')
+    const resumeToken = this._getResumeToken(roomCode)
     const result = await this._request(`/v1/rooms/${encodeURIComponent(roomCode)}/join`, 'POST', {
       game_id: this.gameId,
       player_name: this.playerName,
+      resume_token: resumeToken || undefined,
     })
-    await this._enterRoom(result)
+    this._setResumeToken(roomCode, result.resume_token)
+    await this._enterRoom(result, Boolean(resumeToken))
     return result
   }
 
-  async _enterRoom(result) {
+  async _enterRoom(result, resumed = false) {
     this.disposed = false
+    this.resuming = resumed
     this.room = result.room
     this.selfMember = result.self_member
+    this._setResumeToken(result.room.code, result.resume_token)
     this._setMembers(result.room.members)
     this._emit('room', this.room)
     this._startLoops()
     await Promise.allSettled([this.refreshRoom(), this._pollSignals()])
+    if (resumed && this.room && this.selfMember) {
+      await Promise.allSettled(this.members
+        .filter((member) => member.id !== this.selfMember.id)
+        .map((member) => this._sendSignal(member.id, 'webrtc_restart', {})))
+      this.resuming = false
+      this._syncPeerConnections()
+    }
+  }
+
+  _resumeStorageKey(code) { return `gamelink-resume:${this.gameId}:${String(code).toUpperCase()}` }
+
+  _getResumeToken(code) {
+    try { return window.sessionStorage.getItem(this._resumeStorageKey(code)) } catch { return null }
+  }
+
+  _setResumeToken(code, token) {
+    try {
+      if (token) window.sessionStorage.setItem(this._resumeStorageKey(code), token)
+    } catch { /* Session storage can be unavailable in restricted browser contexts. */ }
   }
 
   _startLoops() {
@@ -195,6 +249,9 @@ export class GameLinkClient {
         })
       }
     } finally {
+      if (room) {
+        try { window.sessionStorage.removeItem(this._resumeStorageKey(room.code)) } catch {}
+      }
       this.dispose()
     }
   }
@@ -225,7 +282,7 @@ export class GameLinkClient {
   }
 
   _syncPeerConnections() {
-    if (!this.selfMember) return
+    if (!this.selfMember || this.resuming) return
     const activeIds = new Set(this.members
       .filter((member) => member.id !== this.selfMember.id)
       .map((member) => member.id))
@@ -246,7 +303,7 @@ export class GameLinkClient {
   }
 
   _ensurePeerConnection(member) {
-    if (!this.selfMember || member.id === this.selfMember.id) return null
+    if (!this.selfMember || this.resuming || member.id === this.selfMember.id) return null
     const existing = this.connections.get(member.id)
     if (existing) return existing
     const connection = new RTCPeerConnection({ iceServers: this.iceServers })
@@ -425,6 +482,17 @@ export class GameLinkClient {
     }
     const member = this.members.find((entry) => entry.id === signal.from)
       || { id: signal.from, name: signal.from, virtual_ip: '', endpoint: '' }
+    if (signal.kind === 'webrtc_restart') {
+      this.connections.get(signal.from)?.close()
+      this.connections.delete(signal.from)
+      this.channels.delete(signal.from)
+      this.pendingIce.delete(signal.from)
+      this.peerStates.delete(signal.from)
+      this.localIceAddresses.delete(signal.from)
+      this.remoteIceAddresses.delete(signal.from)
+      this._ensurePeerConnection(member)
+      return
+    }
     const connection = this._ensurePeerConnection(member)
     if (!connection) return
     const payload = signal.payload || {}

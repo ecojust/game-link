@@ -30,3 +30,33 @@ body:has(.fc-playing){overflow:hidden;overscroll-behavior:none}
 .fc-playing,.fc-playing *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .fc-controller,.fc-controller *{touch-action:none;overscroll-behavior:contain}
 .fc-controller button{-webkit-tap-highlight-color:transparent;outline:none}
+
+/* Phone landscape: keep both games' shared battle viewport and touch controls in view. */
+@media (pointer: coarse) and (orientation: landscape) {
+  .fc-game { width: 100vw; height: 100vh; height: 100dvh; min-height: 0; }
+  .fc-banner {
+    min-height: calc(38px + env(safe-area-inset-top));
+    flex-wrap: nowrap;
+    gap: clamp(8px, 2vw, 18px);
+    overflow-x: auto;
+    padding-top: calc(4px + env(safe-area-inset-top));
+    padding-bottom: 4px;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+  .fc-banner::-webkit-scrollbar { display: none; }
+  .fc-console { flex: 1 1 auto; min-height: 0; }
+  .fc-viewport { inset: 0; width: 100%; height: 100%; min-height: 0; aspect-ratio: auto; }
+  .fc-controller {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 6px max(18px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  }
+  .fc-dpad { grid-template-columns: 34px 34px 34px; grid-template-rows: 30px 30px 30px; }
+  .fc-dpad button,.fc-dpad span { font-size: 13px; }
+  .fc-ab { gap: 12px; }
+  .fc-ab button { width: 48px; height: 48px; font-size: 18px; }
+  .fc-ab>div:last-child { transform: translateY(-12px); }
+  .fc-menu { max-height: calc(100dvh - 54px - env(safe-area-inset-top)); }
+}

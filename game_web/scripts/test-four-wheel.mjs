@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
 
 const directory = await mkdtemp(join(tmpdir(), 'gamelink-fc-'))
-const source = await readFile(new URL('../src/four-wheel/simulation.ts', import.meta.url), 'utf8')
+const source = await readFile(new URL('../src/gamesource/four-wheel/simulation.ts', import.meta.url), 'utf8')
 const moduleFile = join(directory, 'simulation.mjs')
 await writeFile(moduleFile, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText)
 const { createWorld, BattleSimulation, makeMap, moveCar, idleInput, syncDrivers, normalizeInput } = await import(pathToFileURL(moduleFile))

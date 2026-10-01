@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-打开 `http://127.0.0.1:1431`。开发服务器会把 `/v1` API 请求代理到根目录 `.env.local` 中的 `VITE_API_TARGET`。该文件已加入 Git 忽略规则，不会提交。配置示例：
+打开 `http://127.0.0.1:1431` 查看游戏大厅。开发服务器会把 `/v1` API 请求代理到根目录 `.env.local` 中的 `VITE_API_TARGET`。该文件已加入 Git 忽略规则，不会提交。配置示例：
 
 ```env
 VITE_API_TARGET=http://your-server:8088
@@ -28,6 +28,25 @@ npm run build
 ## 房间大厅 API
 
 房间列表由服务端 `GET /v1/rooms` 提供，返回房间号、`game_id`、当前人数和人数上限，不返回玩家身份、虚拟 IP 或网络端点。开发服务器从根目录 `.env.local` 的 `VITE_API_TARGET` 代理 `/v1` 请求。
+
+## 独立游戏网页入口
+
+大厅与游戏完全分开：`src/App.vue` 仅提供大厅，`public/tank/index.html` 与 `public/four-wheel/index.html` 是独立游戏页面，各自加载本目录 `assets/` 下的游戏包、样式、SDK 和图标，不共享游戏资源目录。构建会生成游戏包、复制通用 SDK 到 `public/gamelink.js`，然后输出完整站点到 `dist/`。生成文件不提交 Git。
+
+游戏目录维护在 `public/games.json`，新增游戏只需登记唯一 `id`、展示信息和 `entry_url`，后者支持其他域名的完整 URL。无须修改大厅代码。
+
+统一跳转参数为 `?gameid=tank-arena&room=QTUZD3&username=玩家`，不添加 fragment 或交接凭证。大厅仅创建空房间并预留房主昵称；游戏调用 `GameLinkClient.fromLocation()` 和 `joinFromLocation()`，正式加入后成为房主。在房主进入前，其他昵称暂不能加入；无人进入的空房间两分钟后清理。昵称预留不提供身份认证，同昵称可以冒领。刷新仍通过游戏域名自己的 sessionStorage 恢复玩家身份。
+
+独立游戏示例：
+
+```js
+import { GameLinkClient } from 'https://games.b14f.com/gamelink.js'
+const client = GameLinkClient.fromLocation()
+client.on('message', message => console.log(message))
+await client.joinFromLocation()
+```
+
+跨域游戏需要平台的 `/gamelink.js` 静态响应允许 CORS；API 由服务端 `GAMELINK_ALLOWED_ORIGINS` 控制（默认 `*`，可设置逗号分隔的游戏来源）。每个游戏目录包含本地 SDK 副本，构建时默认将其 API 地址设为 `https://games.b14f.com`。本地联调在根目录 `.env.local` 配置 `VITE_PLATFORM_URL=http://127.0.0.1:1431` 后重新运行；SDK 默认请求其自身所在域名的 API。
 
 ## 联机机制
 
@@ -68,3 +87,31 @@ npm run build
 ```
 
 测试覆盖冲撞伤害和冷却、撞墙朝向、地形、道具、关卡、成员同步与输入校验。渲染、触控和跨浏览器联机仍需在实际设备检查。
+
+### 每个游戏一个目录
+
+```text
+public/
+  games.json
+  tank/
+    index.html
+    assets/    # game.js、style.css、gamelink.js、图标及构建资源
+  four-wheel/
+    index.html
+    assets/    # 本游戏独立资源，无跨游戏共享包
+```
+
+大厅跳转到 `/tank/index.html?gameid=...&room=...&username=...` 或 `/four-wheel/index.html?...`。`index.html` 作为源文件保留，`assets/` 由 `npm run build:games` 生成。部署单个游戏时复制整个游戏文件夹即可；联机仍需访问 GameLink API。开发时修改游戏源码后重新运行 `npm run predev` 更新资源。
+
+### 游戏源码目录
+
+所有游戏源码集中在 `src/gamesource/`：
+
+```text
+src/gamesource/
+  tank/         # 坦克入口、页面及玩法
+  four-wheel/   # 四驱车入口、页面、模拟和渲染
+  shared/       # 两个游戏共用的音效和战场样式
+```
+
+大厅入口仍是 `src/main.ts` 和 `src/App.vue`，`src/style.css` 是大厅与游戏使用的基础样式。构建输出继续分别位于 `public/tank/assets/` 和 `public/four-wheel/assets/`，线上入口不变。

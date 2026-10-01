@@ -1,0 +1,22 @@
+[
+  {
+    "id": "tank-arena",
+    "title": "多人坦克竞技场",
+    "description": "占领掩体，和队友在战场里正面对决。",
+    "players": "1–16 人",
+    "tag": "即时对战",
+    "theme": "tank",
+    "glyph": "T",
+    "entry_url": "/tank/index.html"
+  },
+  {
+    "id": "fc-mini-4wd",
+    "title": "激斗四驱车",
+    "description": "车头冲撞、击退敌车，重返 FC 的俯视战场。",
+    "players": "1–16 人",
+    "tag": "FC 冲撞对战",
+    "theme": "racer",
+    "glyph": "4WD",
+    "entry_url": "/four-wheel/index.html"
+  }
+]

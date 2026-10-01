@@ -14,3 +14,8 @@
 .env
 .env.*
 !.env.example
+
+# Generated standalone game bundles and SDK copy
+/game_web/public/tank/assets/
+/game_web/public/four-wheel/assets/
+/game_web/public/gamelink.js

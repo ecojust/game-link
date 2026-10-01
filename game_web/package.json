@@ -6,8 +6,10 @@
   "scripts": {
     "test:four-wheel": "node scripts/test-four-wheel.mjs",
     "dev": "vite --host 127.0.0.1 --port 1431",
-    "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 1432"
+    "build": "vue-tsc --noEmit && npm run build:games && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 1432",
+    "build:games": "node scripts/build-games.mjs",
+    "predev": "node scripts/build-games.mjs --development"
   },
   "dependencies": {
     "three": "^0.186.1",
