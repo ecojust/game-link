@@ -11,6 +11,7 @@ const integrationDialog = ref<HTMLDialogElement | null>(null)
 const nameDialog = ref<HTMLDialogElement | null>(null)
 const nameDraft = ref('')
 const pendingRoom = ref<Room | null>(null)
+const pendingGame = ref<Game | null>(null)
 let timer = 0
 function gameFor(id: string) { return games.value.find(game => game.id === id) }
 function persist() { localStorage.setItem('gamelink-game-name', username.value.trim()) }
@@ -26,7 +27,18 @@ async function refreshRooms() {
   } catch (reason) { error.value = String(reason) } finally { loading.value = false }
 }
 async function createRoom(game: Game) {
-  if (!validName() || busy.value) return
+  if (busy.value) return
+  if (!username.value.trim()) {
+    pendingGame.value = game
+    pendingRoom.value = null
+    nameDraft.value = ''
+    nameDialog.value?.showModal()
+    return
+  }
+  if (!validName()) return
+  await launchRoom(game)
+}
+async function launchRoom(game: Game) {
   busy.value = true
   try {
     const client = new GameLinkClient({ serverUrl, gameId: game.id, playerName: username.value.trim() })
@@ -56,13 +68,16 @@ function navigateToRoom(room: Room) {
 }
 function submitName() {
   const name = nameDraft.value.trim()
-  if (!name || !pendingRoom.value) return
+  if (!name || (!pendingRoom.value && !pendingGame.value)) return
   username.value = name
   persist()
   const room = pendingRoom.value
+  const game = pendingGame.value
   pendingRoom.value = null
+  pendingGame.value = null
   nameDialog.value?.close()
-  navigateToRoom(room)
+  if (room) navigateToRoom(room)
+  else if (game) void launchRoom(game)
 }
 onMounted(async () => {
   try {
@@ -110,11 +125,11 @@ client.send('shot', shot, { reliability: 'reliable' })</code></pre>
     </dialog>
     <dialog ref="nameDialog" class="name-dialog" aria-labelledby="name-dialog-title">
       <form class="name-dialog-form" @submit.prevent="submitName">
-        <div class="name-dialog-heading"><div><span class="integration-kicker">JOIN ROOM / PLAYER NAME</span><h2 id="name-dialog-title">先告诉大家你是谁</h2></div><button class="dialog-close" type="button" aria-label="关闭" @click="nameDialog?.close()">×</button></div>
-        <p class="name-dialog-copy">进入房间前需要设置一个游戏昵称。</p>
+        <div class="name-dialog-heading"><div><span class="integration-kicker">PLAYER NAME / JOIN OR CREATE</span><h2 id="name-dialog-title">先告诉大家你是谁</h2></div><button class="dialog-close" type="button" aria-label="关闭" @click="nameDialog?.close()">×</button></div>
+        <p class="name-dialog-copy">开始前先设置游戏昵称，即可继续加入或创建房间。</p>
         <label class="name-dialog-label" for="join-player-name">游戏昵称</label>
         <input id="join-player-name" v-model="nameDraft" class="name-dialog-input" name="username" maxlength="32" autocomplete="nickname" placeholder="输入你的昵称" required autofocus />
-        <button class="name-dialog-submit" type="submit">继续进入房间 <span aria-hidden="true">↗</span></button>
+        <button class="name-dialog-submit" type="submit">继续 <span aria-hidden="true">↗</span></button>
       </form>
     </dialog>
     <section class="home-hub">
