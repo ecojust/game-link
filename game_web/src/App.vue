@@ -151,6 +151,8 @@ client.send('shot', shot, { reliability: 'reliable' })</code></pre>
           <article v-for="game in games" :key="game.id" class="game-card" :class="`game-${game.theme}`">
             <div class="game-poster" :class="`poster-${game.theme}`" aria-hidden="true">
               <template v-if="game.theme === 'racer'"><div class="poster-track"><i></i><b></b></div><span class="poster-car car-one">4WD</span><span class="poster-car car-two">4WD</span><small>RAM! CRASH! 4WD BATTLE</small><strong>激斗<br />四驱车</strong></template>
+              <template v-else-if="game.theme === 'doodle'"><div class="doodle-art"><i>✳</i><b>HELLO!</b><em>◉</em><strong>画点<br/>什么</strong></div><span class="poster-lock">{{ game.tag }}</span></template>
+              <template v-else-if="game.theme === 'flight'"><div class="flight-art"><span>✈</span><span>✈</span><span>✈</span><span>✈</span><b>出发点<br/>就在起点。</b></div><span class="poster-lock">四人同场 · 掷骰起飞</span></template>
               <template v-else><div class="poster-grid"></div><div class="poster-tank"><i></i><b></b></div><span class="poster-lock">{{ game.tag }}</span><strong>{{ game.title }}</strong></template>
               <span class="poster-index">{{ game.glyph }}</span>
             </div>

@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 export default defineConfig(() => {
   const game = process.env.GAMELINK_BUILD_GAME
-  if (game !== 'tank' && game !== 'four-wheel') throw new Error('Use scripts/build-games.mjs to build the standalone games')
+  if (!['tank', 'four-wheel', 'doodle', 'flight-chess'].includes(game || '')) throw new Error('Use scripts/build-games.mjs to build the standalone games')
   return {
     publicDir: false,
     define: { 'process.env.NODE_ENV': JSON.stringify('production') },

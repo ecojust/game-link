@@ -33,7 +33,7 @@ npm run build
 
 大厅与游戏完全分开：`src/App.vue` 仅提供大厅，`public/tank/index.html` 与 `public/four-wheel/index.html` 是独立游戏页面，各自加载本目录 `assets/` 下的游戏包、样式、SDK 和图标，不共享游戏资源目录。构建会生成游戏包、复制通用 SDK 到 `public/gamelink.js`，然后输出完整站点到 `dist/`。生成文件不提交 Git。
 
-游戏目录维护在 `public/games.json`，新增游戏只需登记唯一 `id`、展示信息和 `entry_url`，后者支持其他域名的完整 URL。无须修改大厅代码。
+游戏目录维护在 `public/games.json`，登记唯一 `id`、展示信息和 `entry_url`，后者支持其他域名的完整 URL；内置游戏同时加入游戏构建列表。
 
 统一跳转参数为 `?gameid=tank-arena&room=QTUZD3&username=玩家`，不添加 fragment 或交接凭证。大厅只创建空房间，不预留玩家身份或房主；任何玩家都可以用匹配的 `gameid` 和自己的昵称加入。无人加入的空房间两分钟后清理。游戏调用 `GameLinkClient.fromLocation()` 和 `joinFromLocation()` 加入，刷新仍通过游戏域名自己的 sessionStorage 恢复玩家身份。
 
@@ -100,9 +100,15 @@ public/
   four-wheel/
     index.html
     assets/    # 本游戏独立资源，无跨游戏共享包
+  doodle/
+    index.html
+    assets/    # 一起涂鸦独立资源
+  flight-chess/
+    index.html
+    assets/    # 飞行棋独立资源
 ```
 
-大厅跳转到 `/tank/index.html?gameid=...&room=...&username=...` 或 `/four-wheel/index.html?...`。`index.html` 作为源文件保留，`assets/` 由 `npm run build:games` 生成。部署单个游戏时复制整个游戏文件夹即可；联机仍需访问 GameLink API。开发时修改游戏源码后重新运行 `npm run predev` 更新资源。
+大厅跳转到 `/tank/index.html?gameid=...&room=...&username=...`、`/four-wheel/index.html?...`、`/doodle/index.html?...` 或 `/flight-chess/index.html?...`。`index.html` 作为源文件保留，`assets/` 由 `npm run build:games` 生成。部署单个游戏时复制整个游戏文件夹即可；联机仍需访问 GameLink API。开发时修改游戏源码后重新运行 `npm run predev` 更新资源。
 
 ### 游戏源码目录
 
@@ -112,7 +118,25 @@ public/
 src/gamesource/
   tank/         # 坦克入口、页面及玩法
   four-wheel/   # 四驱车入口、页面、模拟和渲染
+  doodle/      # 多人共同涂鸦与画布同步
+  flight-chess/ # 2–4 人回合制飞行棋
   shared/       # 两个游戏共用的音效和战场样式
 ```
 
-大厅入口仍是 `src/main.ts` 和 `src/App.vue`，`src/style.css` 是大厅与游戏使用的基础样式。构建输出继续分别位于 `public/tank/assets/` 和 `public/four-wheel/assets/`，线上入口不变。
+大厅入口仍是 `src/main.ts` 和 `src/App.vue`，`src/style.css` 是大厅与游戏使用的基础样式。游戏资源分别位于各自 `public/<game>/assets/` 目录。
+
+## 飞行棋
+
+`gamelink-flight-chess` 是 2–4 人同房回合制飞行棋。掷出 6 才能起飞，掷出 6 或撞回对手飞机后可再掷一次；按棋盘上的合法飞机执行移动，需刚好到达终点，先让四架飞机归航的人获胜。四个颜色和机库各自固定，非起飞格为安全格。玩家按开局时的房间成员顺序获得座位，动作由当前回合玩家广播后各端校验并推进局面；新加入者只能等待下一局。房间座位最多四人，等待阶段任一玩家均可开始游戏。
+
+消息类型：`ludo-action`、`ludo-state`、`ludo-request` 和 `ludo-reject`。局面通过 GameLink P2P DataChannel 同步，不做服务端持久化。
+
+## 一起涂鸦
+
+`gamelink-doodle` 是房间共享画布，支持触控或鼠标绘画、圆头笔、铅笔、马克笔、荧光笔、喷枪、霓虹笔、蜡笔、调色、笔刷粗细、橡皮擦、仅撤回自己的最近笔画、重做、全房间清空及 PNG 下载。正在画的笔迹通过不可靠消息快速同步，完成后的整笔通过可靠消息同步；新加入玩家会从已连接的房间成员取得画布快照。画布最多保留最近 600 笔，每笔最多 320 个采样点。当前没有云端持久化，房间内所有玩家离开后画布不保留。
+
+消息类型：`doodle-progress`、`doodle-stroke`、`doodle-undo`、`doodle-clear`、`doodle-request` 和 `doodle-snapshot`。数据由房间成员经 GameLink P2P DataChannel 同步。
+
+### 无限画布交互
+
+涂鸦采用世界坐标，每位玩家独立平移和缩放视角。手机单指绘画、双指平移和捏合缩放；选择移动工具后可单指平移。电脑支持空格拖动、滚轮平移、Ctrl/⌘ 加滚轮缩放。回到原点可复位视角，保存视野导出当前可见区域。移动端禁用页面文字选择、长按菜单和画布原生滚动。旧归一化笔画转换到 1000×650 世界坐标；新版联机请所有玩家刷新到相同版本。画布仍最多保留 600 笔，无云端持久化。

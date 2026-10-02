@@ -8,7 +8,7 @@ const platform = (process.env.VITE_PLATFORM_URL || env.VITE_PLATFORM_URL || (mod
 const sdk = await readFile(new URL('../../sdk/js/gamelink.js', import.meta.url), 'utf8')
 // Retire the old shared generated bundles; game sources live outside this directory.
 await rm(new URL('../public/games', import.meta.url), { recursive: true, force: true })
-for (const game of ['tank', 'four-wheel']) {
+for (const game of ['tank', 'four-wheel', 'doodle', 'flight-chess']) {
   process.env.GAMELINK_BUILD_GAME = game
   await build({ root, configFile: fileURLToPath(new URL('../vite.games.config.ts', import.meta.url)), mode })
   const assets = new URL(`../public/${game}/assets/`, import.meta.url)

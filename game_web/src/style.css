@@ -202,6 +202,17 @@ button:focus-visible,input:focus-visible { outline: 2px solid var(--lime); outli
 .poster-track b { position:absolute; inset:28px; border:12px solid #333832; border-radius:50%; }
 .poster-racer .poster-car { position:absolute; z-index:2; width:67px; height:24px; border:3px solid #181b18; border-radius:8px; color:#fbebcb; background:#e16e46; box-shadow:0 4px 14px #0008; font:8px/18px var(--mono); text-align:center; }
 .poster-racer .car-one { left:31%; top:28%; transform:rotate(-18deg); }.poster-racer .car-two { right:19%; bottom:23%; background:#56b5a2; transform:rotate(161deg); }
+.poster-flight { background:linear-gradient(150deg,#30473b,#526f5a); }
+.poster-flight .flight-art { position:absolute; inset:0; background:radial-gradient(circle at center,#d7c26a18,transparent 50%); }
+.poster-flight .flight-art::before { position:absolute; inset:26px 36px; border:1px solid #e4d58c66; border-radius:50%; content:''; }
+.poster-flight .flight-art span { position:absolute; color:#e5ce77; font-size:22px; }
+.poster-flight .flight-art span:nth-child(1) { top:27px; left:54px; transform:rotate(25deg); }
+.poster-flight .flight-art span:nth-child(2) { top:42px; right:53px; color:#8dbbe2; transform:rotate(120deg); }
+.poster-flight .flight-art span:nth-child(3) { right:55px; bottom:22px; color:#d99886; transform:rotate(205deg); }
+.poster-flight .flight-art span:nth-child(4) { bottom:32px; left:57px; color:#84c397; transform:rotate(-55deg); }
+.poster-flight .flight-art b { position:absolute; top:50%; left:50%; color:#f4edd6; font-size:22px; line-height:1.1; text-align:center; transform:translate(-50%,-50%) rotate(-5deg); }
+.game-flight .game-card-meta { color:#dfc166; }
+.game-flight .game-card-footer button { color:#26372d; background:#e1c66d; }
 .poster-racer>small { position:absolute; left:23px; top:20px; color:#e7bf76; font:8px var(--mono); letter-spacing:.13em; }
 .poster-racer>strong { position:absolute; right:25px; bottom:20px; color:#fff0d2; font:800 35px/.86 var(--display); letter-spacing:.06em; text-align:right; text-shadow:2px 3px #34271b; }
 .poster-racer .poster-index { color:#f5bb66; }

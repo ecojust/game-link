@@ -18,5 +18,25 @@
     "theme": "racer",
     "glyph": "4WD",
     "entry_url": "/four-wheel/index.html"
+  },
+  {
+    "id": "gamelink-doodle",
+    "title": "一起涂鸦",
+    "description": "和朋友在同一张画布上即兴创作，画笔实时同步。",
+    "players": "1–16 人",
+    "tag": "多人共创",
+    "theme": "doodle",
+    "glyph": "✳",
+    "entry_url": "/doodle/index.html"
+  },
+  {
+    "id": "gamelink-flight-chess",
+    "title": "飞行棋",
+    "description": "掷出六点起飞，绕场一周，把四架飞机安全送回终点。",
+    "players": "2–4 人",
+    "tag": "多人回合棋",
+    "theme": "flight",
+    "glyph": "✈",
+    "entry_url": "/flight-chess/index.html"
   }
 ]

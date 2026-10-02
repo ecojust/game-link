@@ -15,6 +15,16 @@ gamesource/
 │   ├── FourWheelGame.vue    # 游戏界面、操作、游戏循环与消息同步
 │   ├── simulation.ts       # 车辆运动、地图、碰撞、道具和关卡计算
 │   └── renderer.ts         # Three.js 场景与车辆渲染
+├── doodle/
+│   ├── main.ts             # 多人涂鸦入口
+│   ├── DoodlePage.vue      # 房间接入、玩家及消息同步
+│   ├── DoodleCanvas.vue    # 共同画布、笔刷及画布快照
+│   └── doodle.css          # 涂鸦界面样式
+├── flight-chess/
+│   ├── main.ts             # 飞行棋入口
+│   ├── FlightChessPage.vue # 房间接入、回合规则与状态同步
+│   ├── FlightBoard.vue     # 四人棋盘及飞机交互
+│   └── flight-chess.css    # 飞行棋界面样式
 └── shared/
     ├── audio.ts            # 两款游戏使用的程序音效和背景音乐
     └── battle.css          # 全屏战场、顶部菜单及移动操作样式
@@ -28,6 +38,8 @@ gamesource/
 | --- | --- | --- | --- |
 | 多人坦克竞技场 | `tank-arena` | `tank/main.ts` | `public/tank/index.html` |
 | 激斗四驱车 | `fc-mini-4wd` | `four-wheel/main.ts` | `public/four-wheel/index.html` |
+| 一起涂鸦 | `gamelink-doodle` | `doodle/main.ts` | `public/doodle/index.html` |
+| 飞行棋 | `gamelink-flight-chess` | `flight-chess/main.ts` | `public/flight-chess/index.html` |
 
 上表的源码入口相对于本目录，网页入口相对于 `game_web/`。
 
