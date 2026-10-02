@@ -37,11 +37,10 @@ struct Room {
     id: String,
     code: String,
     game_id: String,
-    host_id: Uuid,
     members: HashMap<Uuid, Member>,
     next_ip: u16,
     #[serde(skip)]
-    pending_host: Option<(String, u64)>,
+    empty_expires_at: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -70,7 +69,6 @@ struct RoomView {
     id: String,
     code: String,
     game_id: String,
-    host_id: Uuid,
     members: Vec<PublicMember>,
 }
 
@@ -280,14 +278,13 @@ async fn create_room(
             id: Uuid::new_v4().to_string(),
             code: code.clone(),
             game_id: req.game_id,
-            host_id: Uuid::nil(),
             members: HashMap::new(),
             next_ip: 2,
-            pending_host: Some((req.player_name.clone(), now + 120)),
+            empty_expires_at: Some(now + 120),
         };
         let response = serde_json::json!({ "room": {
             "id": room.id, "code": room.code, "game_id": room.game_id,
-            "host_id": null, "members": [], "host_username": req.player_name,
+            "members": [],
         }});
         state.inner.lock().await.rooms.insert(code, room);
         return Ok((StatusCode::CREATED, Json(response)));
@@ -305,10 +302,9 @@ async fn create_room(
         id: Uuid::new_v4().to_string(),
         code: code.clone(),
         game_id: req.game_id,
-        host_id: id,
         members: HashMap::from([(id, member.clone())]),
         next_ip: 3,
-        pending_host: None,
+        empty_expires_at: None,
     };
     let view = room_view(&room);
     let mut guard = state.inner.lock().await;
@@ -346,16 +342,8 @@ async fn join_room(
             format!("game_id mismatch: room is for {}", room.game_id),
         ));
     }
-    if let Some((name, expires_at)) = &room.pending_host {
-        if now_secs() >= *expires_at {
-            return Err(ApiError(StatusCode::GONE, "empty room expired".into()));
-        }
-        if req.player_name != *name {
-            return Err(ApiError(
-                StatusCode::CONFLICT,
-                "waiting for room creator to join".into(),
-            ));
-        }
+    if room.empty_expires_at.is_some_and(|expires_at| now_secs() >= expires_at) {
+        return Err(ApiError(StatusCode::GONE, "empty room expired".into()));
     }
     if let Some(token) = req.handoff_token {
         let id = room
@@ -423,9 +411,7 @@ async fn join_room(
         resume_token: Uuid::new_v4(),
         handoff_token: None,
     };
-    if room.pending_host.take().is_some() {
-        room.host_id = id;
-    }
+    room.empty_expires_at = None;
     room.members.insert(id, member.clone());
     Ok(Json(JoinResponse {
         room: room_view(room),
@@ -630,8 +616,6 @@ fn remove_member(state: &mut ServerState, code: &str, member_id: Uuid) -> Result
     state.signals.remove(&member_id);
     if room.members.is_empty() {
         state.rooms.remove(code);
-    } else if room.host_id == member_id {
-        room.host_id = *room.members.keys().next().expect("room has members");
     }
     Ok(())
 }
@@ -666,15 +650,9 @@ async fn cleanup_loop(state: AppState) {
                 stale_all.push(member);
             }
             if room.members.is_empty() {
-                if room
-                    .pending_host
-                    .as_ref()
-                    .is_none_or(|(_, expires)| now_secs() >= *expires)
-                {
+                if room.empty_expires_at.is_none_or(|expires| now_secs() >= expires) {
                     removed.push(code.clone());
                 }
-            } else if !room.members.contains_key(&room.host_id) {
-                room.host_id = *room.members.keys().next().unwrap();
             }
         }
         for member in stale_all {
@@ -699,7 +677,6 @@ fn room_view(room: &Room) -> RoomView {
         id: room.id.clone(),
         code: room.code.clone(),
         game_id: room.game_id.clone(),
-        host_id: room.host_id,
         members: room.members.values().map(public_member).collect(),
     }
 }
@@ -746,7 +723,7 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
     #[tokio::test]
-    async fn handoff_is_single_use_and_preserves_host() {
+    async fn handoff_is_single_use_without_room_owner_role() {
         let app = test_app()
             .layer(axum::middleware::from_fn(cors))
             .layer(MockConnectInfo(
@@ -784,7 +761,6 @@ mod tests {
             serde_json::from_slice(&joined.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         assert_eq!(joined.self_member.id, created.self_member.id);
-        assert_eq!(joined.room.host_id, created.self_member.id);
         assert_eq!(joined.room.members.len(), 1);
         assert!(joined.handoff_token.is_none());
         assert_ne!(joined.resume_token, created.resume_token);
@@ -813,8 +789,8 @@ mod tests {
         assert_eq!(normalize_code(" ab12cd "), "AB12CD");
     }
     #[test]
-    fn removing_host_keeps_room_and_promotes_member() {
-        let host = Uuid::new_v4();
+    fn removing_any_member_keeps_room_without_promotion() {
+        let first = Uuid::new_v4();
         let guest = Uuid::new_v4();
         let member = |id, ip: &str| Member {
             id,
@@ -832,19 +808,18 @@ mod tests {
                     id: "r".into(),
                     code: "ABC123".into(),
                     game_id: "tank-arena".into(),
-                    host_id: host,
                     members: HashMap::from([
-                        (host, member(host, "10.77.0.2")),
+                        (first, member(first, "10.77.0.2")),
                         (guest, member(guest, "10.77.0.3")),
                     ]),
                     next_ip: 4,
-                    pending_host: None,
+                    empty_expires_at: None,
                 },
             )]),
             signals: HashMap::new(),
         };
-        remove_member(&mut state, "ABC123", host).unwrap();
-        assert_eq!(state.rooms["ABC123"].host_id, guest);
+        remove_member(&mut state, "ABC123", first).unwrap();
+        assert!(state.rooms["ABC123"].members.contains_key(&guest));
         assert_eq!(state.rooms["ABC123"].members.len(), 1);
     }
     #[test]
@@ -857,7 +832,6 @@ mod tests {
                     id: "r".into(),
                     code: "ABC123".into(),
                     game_id: "tank-arena".into(),
-                    host_id: id,
                     members: HashMap::from([(
                         id,
                         Member {
@@ -871,7 +845,7 @@ mod tests {
                         },
                     )]),
                     next_ip: 3,
-                    pending_host: None,
+                    empty_expires_at: None,
                 },
             )]),
             signals: HashMap::new(),
@@ -946,7 +920,6 @@ mod tests {
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         assert_eq!(resumed.self_member.id, created.self_member.id);
-        assert_eq!(resumed.room.host_id, created.self_member.id);
         assert_eq!(resumed.room.members.len(), 1);
         let response = app
             .clone()

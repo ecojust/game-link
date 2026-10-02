@@ -77,22 +77,18 @@ let lastFrame = 0
 const keys = new Set<string>()
 const touchPointers = new Map<number, string>()
 const membersSorted = computed(() => [...members.value].sort((a, b) => a.id.localeCompare(b.id)))
-const isHost = computed(() => Boolean(room.value && self.value && room.value.host_id === self.value.id))
 const readyCount = computed(() => members.value.filter((member) => member.id === self.value?.id ? selfReady.value : Boolean(readyMap[member.id])).length)
 const connectedPeerCount = computed(() => members.value.filter((member) => member.id !== self.value?.id && peerStates[member.id] === 'connected').length)
-const relayPeerCount = computed(() => members.value.filter((member) => member.id !== self.value?.id && peerStates[member.id] === 'relay').length)
 const peerTotalCount = computed(() => Math.max(0, members.value.length - (self.value ? 1 : 0)))
 const localIceSummary = computed(() => [...new Set(Object.values(localIceAddresses))].join(' / '))
 const remoteIceSummary = computed(() => [...new Set(Object.values(remoteIceAddresses))].join(' / '))
 const networkMode = computed(() => {
   if (peerTotalCount.value === 0) return '等待队友'
-  if (connectedPeerCount.value + relayPeerCount.value < peerTotalCount.value) return '连接协商中'
-  if (relayPeerCount.value === 0) return 'P2P 直连'
-  if (connectedPeerCount.value === 0) return '服务器转发'
-  return '混合连接'
+  if (members.value.some(member => peerStates[member.id] === 'reconnecting')) return 'P2P 重连中'
+  return connectedPeerCount.value < peerTotalCount.value ? 'P2P 连接中' : 'P2P 直连'
 })
-const networkModeClass = computed(() => networkMode.value === 'P2P 直连' ? 'p2p' : networkMode.value === '服务器转发' ? 'relay' : networkMode.value === '混合连接' ? 'mixed' : 'pending')
-const allPeerPathsReady = computed(() => members.value.length > 1 && members.value.filter((member) => member.id !== self.value?.id).every((member) => ['connected', 'relay'].includes(peerStates[member.id] || '')))
+const networkModeClass = computed(() => networkMode.value === 'P2P 直连' ? 'p2p' : 'pending')
+const allPeerPathsReady = computed(() => members.value.length > 1 && members.value.filter((member) => member.id !== self.value?.id).every((member) => peerStates[member.id] === 'connected'))
 const canStart = computed(() => allPeerPathsReady.value && readyCount.value === members.value.length)
 const scores = computed(() => [localTank, ...Object.values(remoteTanks)].filter((tank) => tank.id).sort((a, b) => b.kills - a.kills))
 const activeGame = { title: '多人坦克竞技场', subtitle: 'IRON FIELD' }
@@ -129,15 +125,21 @@ async function connectRoom() {
       delete localIceAddresses[peerId]
       delete remoteIceAddresses[peerId]
       delete remoteTanks[peerId]
+      delete syncingPeers[peerId]
+      stateVersions.delete(peerId)
     } else {
       peerStates[peerId] = state
       if (localIce) localIceAddresses[peerId] = localIce
       if (remoteIce) remoteIceAddresses[peerId] = remoteIce
       if (state !== 'connected') delete localIceAddresses[peerId]
       if (state === 'connected') markLocalStateDirty()
-      if (state === 'relay') note.value = 'P2P 直连失败，正在使用服务器信令队列转发。'
+      if (state === 'reconnecting') note.value = 'P2P 连接中断，正在自动重连。'
     }
     clearReadyIfDisconnected()
+  })
+  session.on('peer-ready', ({ peerId }) => {
+    error.value = ''
+    requestPeerRecovery(peerId)
   })
   session.on('message', receiveEvent)
   session.on('error', (reason) => { error.value = messageOf(reason) })
@@ -165,6 +167,33 @@ async function connectRoom() {
   }
 }
 
+// Each owner supplies its current tank; old shots/hits are intentionally not replayed.
+const syncingPeers = reactive<Record<string, boolean>>({})
+const stateVersions = new Map<string, number>()
+let stateRevision = 0
+const recoveryNotice = computed(() => {
+  const missing = members.value.filter(m => m.id !== self.value?.id && (peerStates[m.id] !== 'connected' || syncingPeers[m.id]))
+  return missing.length ? `${missing.map(m => m.name).join('、')} · 连接中断或正在同步，战斗暂停；自动重连中` : ''
+})
+function sendRecovery(peerId: string) {
+  if (!self.value || !localTank.id) return
+  sendPeerData('tank-recovery', { tank: tankSnapshot(localTank), ready: selfReady.value, result: phase.value === 'result' ? gameMessage.value : '' }, peerId)
+}
+
+function requestPeerRecovery(peerId: string) {
+  if (!self.value || !localTank.id || peerStates[peerId] !== 'connected') return
+  syncingPeers[peerId] = true
+  stateVersions.delete(peerId)
+  sendRecovery(peerId)
+  sendPeerData('tank-recovery-request', {}, peerId)
+}
+
+function synchronizeConnectedPeers() {
+  for (const member of members.value) {
+    if (member.id !== self.value?.id) requestPeerRecovery(member.id)
+  }
+}
+
 async function broadcast(kind: string, payload: unknown) {
   if (!clientSession) return
   await clientSession.broadcast(kind, payload)
@@ -189,7 +218,7 @@ function flushLocalState() {
     localStateDirty = false
     return
   }
-  const minimumInterval = relayPeerCount.value > 0 ? 200 : 50
+  const minimumInterval = 50
   const remaining = minimumInterval - (performance.now() - lastStateSentAt)
   if (remaining > 0) {
     if (!stateFlushTimeout) {
@@ -208,7 +237,7 @@ function flushLocalState() {
 async function toggleReady() {
   if (!self.value) return
   if (!allPeerPathsReady.value) {
-    error.value = '正在建立玩家连接；直连失败时会自动切换服务器转发。'
+    error.value = '正在建立玩家连接；直连失败时会自动重试。'
     return
   }
   selfReady.value = !selfReady.value
@@ -225,7 +254,7 @@ function clearReadyIfDisconnected() {
 }
 
 async function startBattle() {
-  if (!isHost.value || !canStart.value || !room.value) return
+  if (!canStart.value || !room.value) return
   const roster = membersSorted.value.map((member) => ({ id: member.id, name: member.name }))
   try {
     await broadcast('game_started', { roster })
@@ -235,10 +264,24 @@ async function startBattle() {
 
 function receiveEvent(signal: GameLinkMessage<any>) {
   const payload = signal.payload || {}
+  if (signal.kind === 'tank-recovery-request') { sendRecovery(signal.from); return }
+  if (signal.kind === 'tank-recovery') {
+    if (!payload.tank || !Number.isSafeInteger(payload.tank.revision) || ![payload.tank.x, payload.tank.y, payload.tank.angle, payload.tank.hp].every(Number.isFinite)) return
+    receiveEvent({ ...signal, kind: 'player_state', payload: payload.tank })
+    readyMap[signal.from] = Boolean(payload.ready)
+    delete syncingPeers[signal.from]
+    note.value = 'P2P 已恢复，玩家状态已同步。'
+    if (payload.result) {
+      gameMessage.value = payload.result; phase.value = 'result'; stopBattleLoop()
+    }
+    return
+  }
   if (signal.kind === 'ready') readyMap[signal.from] = Boolean(payload.ready)
   else if (signal.kind === 'game_started') beginBattle(payload.roster || [])
   else if (signal.kind === 'player_state') {
     if (signal.from !== self.value?.id) {
+      if (!Number.isSafeInteger(payload.revision) || payload.revision <= (stateVersions.get(signal.from) ?? -1)) return
+      stateVersions.set(signal.from, payload.revision)
       const tank = remoteTanks[signal.from] ||= newTank(signal.from, payload.name || '队友', 0)
       const x = Number(payload.x)
       const y = Number(payload.y)
@@ -283,12 +326,11 @@ function peerStatusLabel(memberId: string) {
     if (peerTotalCount.value === 0) return '等待玩家接入'
     const modes: string[] = []
     if (connectedPeerCount.value) modes.push('P2P 直连')
-    if (relayPeerCount.value) modes.push('服务器转发')
-    if (connectedPeerCount.value + relayPeerCount.value < peerTotalCount.value) modes.push('连接协商中')
+    if (connectedPeerCount.value < peerTotalCount.value) modes.push('连接协商中')
     return modes.join(' + ')
   }
   if (peerStates[memberId] === 'connected') return 'P2P 已连接'
-  if (peerStates[memberId] === 'relay') return '服务器转发'
+  if (peerStates[memberId] === 'reconnecting') return 'P2P 重连中'
   return 'P2P 连接中'
 }
 
@@ -306,11 +348,12 @@ function beginBattle(roster: Array<{ id: string; name: string }>) {
   gameMessage.value = ''
   lastFrame = performance.now()
   markLocalStateDirty()
+  synchronizeConnectedPeers()
   if (!animationFrame) animationFrame = requestAnimationFrame(frame)
 }
 
 function tankSnapshot(tank: Tank) {
-  return { x: tank.x, y: tank.y, angle: tank.angle, hp: tank.hp, kills: tank.kills, color: tank.color, alive: tank.alive, name: tank.name }
+  return { revision: ++stateRevision, x: tank.x, y: tank.y, angle: tank.angle, hp: tank.hp, kills: tank.kills, color: tank.color, alive: tank.alive, name: tank.name }
 }
 
 function stopBattleLoop() {
@@ -333,6 +376,7 @@ function frame(now: number) {
 }
 
 function tick(dt: number) {
+  if (recoveryNotice.value) { bullets.splice(0); keys.clear(); fireHeld.value = false; return }
   if (localTank.alive) {
     const previousX = localTank.x
     const previousY = localTank.y
@@ -385,7 +429,7 @@ function tick(dt: number) {
   }
   const living = [localTank, ...Object.values(remoteTanks)].filter((tank) => tank.alive)
   const allMembersSpawned = Boolean(room.value && room.value.members.every((member) => member.id === self.value?.id || remoteTanks[member.id]))
-  if (living.length === 1 && allMembersSpawned && (room.value?.members.length ?? 0) > 1 && isHost.value) {
+  if (living.length === 1 && allMembersSpawned && (room.value?.members.length ?? 0) > 1) {
     const winner = living[0]
     gameMessage.value = `${winner.name} 获得胜利`
     phase.value = 'result'
@@ -404,7 +448,7 @@ function moveTank(dx: number, dy: number) {
 }
 
 function fire() {
-  if (!self.value || shotCooldown.value > 0 || !localTank.alive) return
+  if (recoveryNotice.value || !self.value || shotCooldown.value > 0 || !localTank.alive) return
   shotCooldown.value = 0.42
   const id = crypto.randomUUID()
   const shot = { id, owner: self.value.id, x: localTank.x + Math.cos(localTank.angle) * 28, y: localTank.y + Math.sin(localTank.angle) * 28, angle: localTank.angle }
@@ -557,11 +601,11 @@ onBeforeUnmount(() => {
   <main class="game-shell tank-playing">
     <div v-if="phase === 'start'" class="launch-status"><p>{{ error || '正在加入坦克房间…' }}</p><a :href="platformHome">返回平台大厅</a></div>
     <section v-else class="room-screen">
-      <div class="room-toolbar"><div><div class="kicker"><span></span> {{ activeGame.subtitle || room?.game_id }}</div><h1>{{ activeGame.title || room?.game_id }}<i>.</i></h1><p>{{ room?.game_id === 'fc-mini-4wd' ? '用车头击破敌车，保护侧面与车尾。' : phase === 'lobby' ? '分享房间号，所有人准备就绪后由房主开始。' : phase === 'battle' ? '击中对手，留在战场上。' : gameMessage }}</p></div><button class="room-code" @click="copyRoomCode"><small>作战房间 · 点击复制</small><strong>{{ room?.code }}</strong><span>▢</span></button><button class="exit-button" @click="leaveRoomFromButton">离开房间 ↗</button></div>
+      <div class="room-toolbar"><div><div class="kicker"><span></span> {{ activeGame.subtitle || room?.game_id }}</div><h1>{{ activeGame.title || room?.game_id }}<i>.</i></h1><p>{{ room?.game_id === 'fc-mini-4wd' ? '用车头击破敌车，保护侧面与车尾。' : phase === 'lobby' ? '分享房间号，所有人准备就绪后即可开始。' : phase === 'battle' ? '击中对手，留在战场上。' : gameMessage }}</p></div><button class="room-code" @click="copyRoomCode"><small>作战房间 · 点击复制</small><strong>{{ room?.code }}</strong><span>▢</span></button><button class="exit-button" @click="leaveRoomFromButton">离开房间 ↗</button></div>
 
       <div v-if="phase === 'lobby'" class="lobby-grid">
-        <section class="roster-card"><div class="panel-heading"><div><small>DEPLOYMENT ROSTER</small><h2>作战成员 <span>{{ members.length }} / 16</span></h2></div><span class="sync-label" :class="networkModeClass"><i></i>{{ networkMode }} · P2P {{ connectedPeerCount }} / 转发 {{ relayPeerCount }}</span></div><div class="roster-list"><div v-for="(member, index) in membersSorted" :key="member.id" class="roster-row" :class="{ mine: member.id === self?.id }"><span class="player-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="player-badge" :style="{ '--paint': PALETTE[index % PALETTE.length] }">{{ member.name.slice(0, 1).toUpperCase() }}</span><div class="player-copy"><strong>{{ member.name }}<small v-if="member.id === self?.id">你</small></strong><span>{{ member.id === room?.host_id ? '房主 · 作战指挥' : '作战成员' }}</span></div><code class="peer-state" :class="{ linked: peerStates[member.id] === 'connected', relayed: peerStates[member.id] === 'relay' }">{{ peerStatusLabel(member.id) }}</code><span class="ready-pill" :class="{ ready: member.id === self?.id ? selfReady : readyMap[member.id] }"><i></i>{{ member.id === self?.id ? selfReady ? '已准备' : '待命中' : readyMap[member.id] ? '已准备' : '等待准备' }}</span></div><div v-if="members.length < 2" class="recruit-note"><span>⌁</span><div><strong>还需要一位对手</strong><p>把房间号发给朋友。至少两位玩家才能开始。</p></div></div></div><div class="roster-actions"><button class="ready-button" :class="{ active: selfReady }" :disabled="!allPeerPathsReady" @click="toggleReady">{{ selfReady ? '取消准备' : '我已准备' }} <span>{{ selfReady ? '✓' : '＋' }}</span></button><button v-if="isHost" class="start-button" :disabled="!canStart" @click="startBattle">开始对战 <span>→</span></button><div v-else class="host-wait"><span v-if="!allPeerPathsReady">正在建立 P2P / 服务器转发连接…</span><span v-else>等待房主开始 · {{ readyCount }}/{{ members.length }} 已准备</span></div></div></section>
-        <aside class="lobby-side"><div class="map-preview"><div class="map-label"><small>ARENA MAP</small><strong>铁锈峡谷</strong></div><div class="mini-arena"><i v-for="(member, index) in membersSorted" :key="member.id" class="mini-tank" :style="{ left: `${12 + (index * 19) % 76}%`, top: `${18 + (index * 31) % 64}%`, '--paint': PALETTE[index % PALETTE.length] }"></i><b class="block block-a"></b><b class="block block-b"></b><b class="block block-c"></b></div><div class="map-meta"><span>场地 01</span><span>障碍物 · 5</span><span>队伍 · {{ members.length }}</span></div></div><div class="control-card"><small>FIELD MANUAL</small><h3>准备好就按下开战</h3><div><kbd>W A S D</kbd><span>移动坦克</span></div><div><kbd>↑ ↓ ← →</kbd><span>同样可移动</span></div><div><kbd>SPACE</kbd><span>发射炮弹</span></div></div><p class="network-footnote">优先通过 WebRTC 直连坦克数据；直连失败时会经服务端信令队列转发，不是通用 UDP Relay。</p></aside>
+        <section class="roster-card"><div class="panel-heading"><div><small>DEPLOYMENT ROSTER</small><h2>作战成员 <span>{{ members.length }} / 16</span></h2></div><span class="sync-label" :class="networkModeClass"><i></i>{{ networkMode }} · P2P {{ connectedPeerCount }} / {{ peerTotalCount }}</span></div><div class="roster-list"><div v-for="(member, index) in membersSorted" :key="member.id" class="roster-row" :class="{ mine: member.id === self?.id }"><span class="player-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="player-badge" :style="{ '--paint': PALETTE[index % PALETTE.length] }">{{ member.name.slice(0, 1).toUpperCase() }}</span><div class="player-copy"><strong>{{ member.name }}<small v-if="member.id === self?.id">你</small></strong><span>{{ member.id === self?.id ? '玩家 · 本机控制' : '玩家 · P2P 对等连接' }}</span></div><code class="peer-state" :class="{ linked: peerStates[member.id] === 'connected' }">{{ peerStatusLabel(member.id) }}</code><span class="ready-pill" :class="{ ready: member.id === self?.id ? selfReady : readyMap[member.id] }"><i></i>{{ member.id === self?.id ? selfReady ? '已准备' : '待命中' : readyMap[member.id] ? '已准备' : '等待准备' }}</span></div><div v-if="members.length < 2" class="recruit-note"><span>⌁</span><div><strong>还需要一位对手</strong><p>把房间号发给朋友。至少两位玩家才能开始。</p></div></div></div><div class="roster-actions"><button class="ready-button" :class="{ active: selfReady }" :disabled="!allPeerPathsReady" @click="toggleReady">{{ selfReady ? '取消准备' : '我已准备' }} <span>{{ selfReady ? '✓' : '＋' }}</span></button><button class="start-button" :disabled="!canStart" @click="startBattle">开始对战 <span>→</span></button><div v-if="!canStart" class="room-hint"><span v-if="!allPeerPathsReady">正在建立 P2P 连接…</span><span v-else>等待所有玩家准备 · {{ readyCount }}/{{ members.length }}</span></div></div></section>
+        <aside class="lobby-side"><div class="map-preview"><div class="map-label"><small>ARENA MAP</small><strong>铁锈峡谷</strong></div><div class="mini-arena"><i v-for="(member, index) in membersSorted" :key="member.id" class="mini-tank" :style="{ left: `${12 + (index * 19) % 76}%`, top: `${18 + (index * 31) % 64}%`, '--paint': PALETTE[index % PALETTE.length] }"></i><b class="block block-a"></b><b class="block block-b"></b><b class="block block-c"></b></div><div class="map-meta"><span>场地 01</span><span>障碍物 · 5</span><span>队伍 · {{ members.length }}</span></div></div><div class="control-card"><small>FIELD MANUAL</small><h3>准备好就按下开战</h3><div><kbd>W A S D</kbd><span>移动坦克</span></div><div><kbd>↑ ↓ ← →</kbd><span>同样可移动</span></div><div><kbd>SPACE</kbd><span>发射炮弹</span></div></div><p class="network-footnote">游戏数据仅通过 WebRTC 直连，连接失败后自动重试。</p></aside>
       </div>
 
 
@@ -574,6 +618,7 @@ onBeforeUnmount(() => {
         </header>
         <div class="fc-console">
           <div class="fc-viewport">
+            <div v-if="recoveryNotice" class="network-recovery" role="status">{{ recoveryNotice }}</div>
             <canvas ref="canvas" class="fc-canvas" aria-label="多人坦克战场"></canvas>
             <div v-if="phase === 'result'" class="fc-cover"><small>ARENA COMPLETE</small><strong>{{ gameMessage }}</strong><button @click="leaveRoomFromButton">返回大厅</button></div>
             <div v-else-if="!localTank.alive" class="fc-respawn">坦克已被击毁 · 观战中</div>

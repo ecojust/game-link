@@ -9,7 +9,6 @@ export interface GameLinkRoom {
   id: string
   code: string
   game_id: string
-  host_id: string
   members: GameLinkMember[]
 }
 
@@ -25,12 +24,14 @@ export interface GameLinkMessage<T = unknown> {
   kind: string
   payload: T
   sent_at: number
-  transport: 'p2p' | 'server-forwarding' | 'server-event'
+  transport: 'p2p'
 }
 
 export interface GameLinkPeerState {
   peerId: string
-  state: 'connecting' | 'connected' | 'relay' | 'closed'
+  state: 'connecting' | 'connected' | 'reconnecting' | 'closed'
+  attempt: number
+  generation: number
   localIce: string
   remoteIce: string
 }
@@ -40,8 +41,11 @@ export interface GameLinkClientOptions {
   gameId: string
   playerName: string
   iceServers?: RTCIceServer[]
+  requestTimeoutMs?: number
   pollIntervalMs?: number
   heartbeatIntervalMs?: number
+  peerHeartbeatIntervalMs?: number
+  peerTimeoutMs?: number
   roomRefreshIntervalMs?: number
 }
 
@@ -61,7 +65,9 @@ export class GameLinkClient {
   on(event: 'room', listener: (room: GameLinkRoom) => void): () => void
   on(event: 'members', listener: (members: GameLinkMember[]) => void): () => void
   on(event: 'message', listener: (message: GameLinkMessage) => void): () => void
+  on(event: 'peer-ready', listener: (event: { peerId: string; generation: number; recovered: boolean }) => void): () => void
   on(event: 'peer-state', listener: (state: GameLinkPeerState) => void): () => void
+  on(event: 'delivery-skipped', listener: (event: { peerId: string; kind: string; reason: 'p2p-not-ready' }) => void): () => void
   on(event: 'error', listener: (error: Error) => void): () => void
   on(event: 'room-closed', listener: (event: { reason: string }) => void): () => void
   createRoom(): Promise<GameLinkJoinResponse>

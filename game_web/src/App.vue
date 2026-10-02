@@ -99,7 +99,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <ol class="integration-steps">
         <li><b>给游戏登记入口</b><span>在平台游戏目录登记唯一的 <code>gameid</code>、游戏名称和入口 URL。入口可以是独立域名。</span></li>
         <li><b>接收房间参数</b><span>平台会打开你的页面，并传入 <code>gameid</code>、<code>room</code>、<code>username</code> 三个查询参数。</span></li>
-        <li><b>用 JS SDK 加入房间</b><span>成功加入后，首位玩家成为房主；监听成员和消息事件，再把游戏操作与状态通过 SDK 同步。</span></li>
+        <li><b>用 JS SDK 加入房间</b><span>成功加入后，所有玩家平等；监听成员和消息事件，再把游戏操作与状态通过 SDK 进行 P2P 同步。</span></li>
       </ol>
       <div class="integration-code-label">坦克大战实际使用方式 · Game ID: tank-arena</div>
       <pre class="integration-code"><code>import { GameLinkClient } from

@@ -60,11 +60,11 @@ await test('co-op clear and final clear advance; continue restores current stage
   sim.reset(players, 5); sim.world.cars.forEach(c => c.hp = 0); sim.step(1 / 60); assert.equal(sim.world.phase, 'over')
   sim.reset(players); assert.equal(sim.world.stage, 5); assert.equal(sim.world.cars[0].hp, 100)
 })
-await test('later joins preserve ongoing combat and host migration preserves world', () => {
+await test('later joins preserve ongoing combat and replicas preserve world state', () => {
   const sim = arena(); sim.world.cars[0].hp = 48; sim.world.kills = 3
   syncDrivers(sim.world, [...players, { id: 'three', name: '三号' }]); assert.equal(sim.world.cars.length, 3); assert.equal(sim.world.cars[0].hp, 48)
-  const nextHost = new BattleSimulation(structuredClone(sim.world))
-  syncDrivers(nextHost.world, players.slice(1)); assert.equal(nextHost.world.kills, 3); assert.equal(nextHost.world.cars[0].id, 'two')
+  const replica = new BattleSimulation(structuredClone(sim.world))
+  syncDrivers(replica.world, players.slice(1)); assert.equal(replica.world.kills, 3); assert.equal(replica.world.cars[0].id, 'two')
 })
 await test('invalid input rejected and finite axes are bounded', () => {
   assert.equal(normalizeInput({ x: NaN, z: 0 }), null)

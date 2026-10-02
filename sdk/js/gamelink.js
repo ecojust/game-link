@@ -14,7 +14,10 @@ export class GameLinkClient {
     playerName,
     iceServers = DEFAULT_ICE_SERVERS,
     pollIntervalMs = 120,
+    requestTimeoutMs = 8000,
     heartbeatIntervalMs = 8_000,
+    peerHeartbeatIntervalMs = 4_000,
+    peerTimeoutMs = 12_000,
     roomRefreshIntervalMs = 1_500,
   }) {
     if (!gameId) throw new Error('gameId is required')
@@ -22,9 +25,14 @@ export class GameLinkClient {
     this.serverUrl = serverUrl.replace(/\/$/, '')
     this.gameId = gameId
     this.playerName = playerName.trim()
-    this.iceServers = iceServers
+    this.iceServers = iceServers.map(server => ({ ...server,
+      urls: (Array.isArray(server.urls) ? server.urls : [server.urls]).filter(url => /^stuns?:/i.test(url)),
+    })).filter(server => server.urls.length)
+    this.requestTimeoutMs = requestTimeoutMs
     this.pollIntervalMs = pollIntervalMs
     this.heartbeatIntervalMs = heartbeatIntervalMs
+    this.peerHeartbeatIntervalMs = peerHeartbeatIntervalMs
+    this.peerTimeoutMs = peerTimeoutMs
     this.roomRefreshIntervalMs = roomRefreshIntervalMs
     this.room = null
     this.selfMember = null
@@ -41,6 +49,15 @@ export class GameLinkClient {
     this.disposed = false
     this.resuming = false
     this.loggedConnections = new WeakSet()
+    this.retryTimers = new Map()
+    this.retryAttempts = new Map()
+    this.generations = new Map()
+    this.futureIce = new Map()
+    this.connectedOnce = new Set()
+    this.lastGeneration = 0
+    this.peerHeartbeatAt = new Map()
+    this.peerHeartbeatPending = new Map()
+    this.peerHeartbeatSequence = 0
   }
 
   on(eventName, listener) {
@@ -142,7 +159,8 @@ export class GameLinkClient {
     this.refreshRoom().catch((error) => this._reportError(error))
     this.timers.push(setInterval(() => this._pollSignals(), this.pollIntervalMs))
     this.timers.push(setInterval(() => this._heartbeat(), this.heartbeatIntervalMs))
-    this.timers.push(setInterval(() => this.refreshRoom(), this.roomRefreshIntervalMs))
+    this.timers.push(setInterval(() => this._checkPeerHeartbeats(), this.peerHeartbeatIntervalMs))
+    this.timers.push(setInterval(() => this.refreshRoom().catch(error => this._reportError(error)), this.roomRefreshIntervalMs))
   }
 
   _stopLoops() {
@@ -193,16 +211,12 @@ export class GameLinkClient {
   }
 
   async broadcast(kind, payload) {
-    if (!this.room || !this.selfMember) throw new Error('not connected to a room')
-    await this._request(`/v1/rooms/${encodeURIComponent(this.room.code)}/events`, 'POST', {
-      from: this.selfMember.id,
-      kind,
-      payload,
-    })
+    if (this.disposed || !this.room || !this.selfMember) throw new Error('not connected to a room')
+    this.send(kind, payload, { reliability: 'reliable' })
   }
 
   send(kind, payload, { target, reliability } = {}) {
-    if (!this.selfMember) return
+    if (this.disposed || !this.selfMember) return
     const delivery = reliability || (kind === 'player_state' ? 'unreliable' : 'reliable')
     const serialized = JSON.stringify({ kind, payload })
     const destinations = target ? [target] : this.members
@@ -211,7 +225,7 @@ export class GameLinkClient {
     for (const peerId of destinations) {
       const channel = this.channels.get(peerId)?.[delivery === 'unreliable' ? 'state' : 'control']
       const peerName = this.members.find((member) => member.id === peerId)?.name || peerId
-      if (channel?.readyState === 'open') {
+      if (this.peerStates.get(peerId) === 'connected' && channel?.readyState === 'open') {
         if (delivery === 'unreliable' && channel.bufferedAmount > 8192) continue
         try {
           channel.send(serialized)
@@ -225,16 +239,8 @@ export class GameLinkClient {
         } catch (error) {
           this._reportError(error)
         }
-      } else if (this.peerStates.get(peerId) === 'relay') {
-        this._sendSignal(peerId, 'game_relay', { kind, payload }).then(() => {
-          console.info('[GameLink SDK] message sent', {
-            peerName,
-            peerId,
-            transport: 'GameLink HTTP signaling fallback',
-            address: new URL(`/v1/rooms/${this.room.code}/signals`, this.serverUrl || window.location.origin).href,
-            message: { kind, payload },
-          })
-        }).catch((error) => this._reportError(error))
+      } else {
+        this._emit('delivery-skipped', { peerId, kind, reason: 'p2p-not-ready' })
       }
     }
   }
@@ -260,6 +266,14 @@ export class GameLinkClient {
     if (this.disposed) return
     this.disposed = true
     this._stopLoops()
+    for (const timer of this.retryTimers.values()) clearTimeout(timer)
+    this.retryTimers.clear()
+    this.retryAttempts.clear()
+    this.generations.clear()
+    this.futureIce.clear()
+    this.connectedOnce.clear()
+    this.peerHeartbeatAt.clear()
+    this.peerHeartbeatPending.clear()
     for (const connection of this.connections.values()) connection.close()
     this.connections.clear()
     this.channels.clear()
@@ -282,14 +296,23 @@ export class GameLinkClient {
   }
 
   _syncPeerConnections() {
-    if (!this.selfMember || this.resuming) return
+    if (this.disposed || !this.selfMember || this.resuming) return
     const activeIds = new Set(this.members
       .filter((member) => member.id !== this.selfMember.id)
       .map((member) => member.id))
-    for (const [peerId, connection] of this.connections) {
+    for (const peerId of new Set([...this.connections.keys(), ...this.retryTimers.keys(), ...this.generations.keys()])) {
+      const connection = this.connections.get(peerId)
       if (activeIds.has(peerId)) continue
-      connection.close()
+      clearTimeout(this.retryTimers.get(peerId))
+      this.retryTimers.delete(peerId)
+      this.retryAttempts.delete(peerId)
+      this.generations.delete(peerId)
+      this.futureIce.delete(peerId)
+      this.connectedOnce.delete(peerId)
+      this.peerHeartbeatAt.delete(peerId)
+      this.peerHeartbeatPending.delete(peerId)
       this.connections.delete(peerId)
+      connection?.close()
       this.channels.delete(peerId)
       this.pendingIce.delete(peerId)
       this.peerStates.delete(peerId)
@@ -302,44 +325,66 @@ export class GameLinkClient {
     }
   }
 
-  _ensurePeerConnection(member) {
-    if (!this.selfMember || this.resuming || member.id === this.selfMember.id) return null
+  _ensurePeerConnection(member, generation) {
+    if (!member || this.disposed || !this.selfMember || this.resuming || member.id === this.selfMember.id) return null
     const existing = this.connections.get(member.id)
     if (existing) return existing
+    const offerer = this.selfMember.id.localeCompare(member.id) < 0
+    if (!offerer && !generation) { this._watchConnection(member.id); return null }
+    if (offerer) generation = this.lastGeneration = Math.max(Date.now() * 1000, this.lastGeneration + 1)
+    this.generations.set(member.id, generation)
     const connection = new RTCPeerConnection({ iceServers: this.iceServers })
     this.connections.set(member.id, connection)
     this.channels.set(member.id, {})
-    this.peerStates.set(member.id, 'connecting')
-    this._emitPeerState(member.id, 'connecting')
+    this._setPeerState(member.id, this.connectedOnce.has(member.id) || this.retryAttempts.has(member.id) ? 'reconnecting' : 'connecting')
     connection.onicecandidate = (event) => {
-      if (!event.candidate) return
+      if (!event.candidate || this.disposed || this.connections.get(member.id) !== connection) return
       this._rememberIceCandidate(this.localIceAddresses, member.id, event.candidate.candidate)
       this._emitPeerState(member.id, this.peerStates.get(member.id) || 'connecting')
-      this._sendSignal(member.id, 'webrtc_ice', event.candidate.toJSON())
+      this._sendSignal(member.id, 'webrtc_ice', { ...event.candidate.toJSON(), generation })
         .catch((error) => this._reportError(error))
     }
-    connection.ondatachannel = (event) => this._attachChannel(member.id, event.channel)
-    connection.onconnectionstatechange = () => this._updatePeerState(member.id)
-    if (this.selfMember.id.localeCompare(member.id) < 0) {
+    connection.ondatachannel = (event) => { if (this.connections.get(member.id) === connection) this._attachChannel(member.id, event.channel) }
+    connection.onconnectionstatechange = () => { if (this.connections.get(member.id) === connection) this._updatePeerState(member.id) }
+    if (offerer) {
       this._attachChannel(member.id, connection.createDataChannel('control'))
       this._attachChannel(member.id, connection.createDataChannel('state', { ordered: false, maxRetransmits: 0 }))
       this._createOffer(member.id, connection)
     }
+    this._watchConnection(member.id)
     return connection
   }
 
   _attachChannel(peerId, channel) {
+    const connection = this.connections.get(peerId)
+    const current = () => !this.disposed && this.connections.get(peerId) === connection
     const channels = this.channels.get(peerId) || {}
     if (channel.label === 'state') channels.state = channel
     else channels.control = channel
     this.channels.set(peerId, channels)
-    channel.onopen = () => this._updatePeerState(peerId)
-    channel.onclose = () => this._updatePeerState(peerId)
-    channel.onerror = () => this._setPeerState(peerId, 'relay')
+    channel.onopen = () => {
+      if (!current()) return
+      this.peerHeartbeatAt.set(peerId, Date.now())
+      this._updatePeerState(peerId)
+    }
+    channel.onclose = () => { if (current()) this._retryPeer(peerId) }
+    channel.onerror = () => { if (current()) this._retryPeer(peerId) }
     channel.onmessage = (event) => {
+      if (!current()) return
       try {
         const message = JSON.parse(String(event.data))
         if (!message || typeof message.kind !== 'string') return
+        this.peerHeartbeatAt.set(peerId, Date.now())
+        if (message.kind === '__gamelink_peer_ping') {
+          const control = this.channels.get(peerId)?.control
+          if (control?.readyState === 'open') control.send(JSON.stringify({ kind: '__gamelink_peer_pong', payload: message.payload }))
+          return
+        }
+        if (message.kind === '__gamelink_peer_pong') {
+          if (message.payload?.seq === this.peerHeartbeatPending.get(peerId)) this.peerHeartbeatPending.delete(peerId)
+          return
+        }
+        this.peerHeartbeatPending.delete(peerId)
         this._emit('message', {
           from: peerId,
           kind: message.kind,
@@ -354,6 +399,33 @@ export class GameLinkClient {
     this._updatePeerState(peerId)
   }
 
+  _checkPeerHeartbeats(now = Date.now()) {
+    if (this.disposed) return
+    for (const [peerId, state] of this.peerStates) {
+      if (state !== 'connected') continue
+      const channel = this.channels.get(peerId)?.control
+      if (channel?.readyState !== 'open') {
+        this._retryPeer(peerId)
+        continue
+      }
+      const lastSeen = this.peerHeartbeatAt.get(peerId) || now
+      if (now - lastSeen > this.peerTimeoutMs) {
+        this.peerHeartbeatPending.delete(peerId)
+        this._retryPeer(peerId)
+        continue
+      }
+      if (this.peerHeartbeatPending.has(peerId)) continue
+      const seq = ++this.peerHeartbeatSequence
+      try {
+        channel.send(JSON.stringify({ kind: '__gamelink_peer_ping', payload: { seq } }))
+        this.peerHeartbeatPending.set(peerId, seq)
+      } catch (error) {
+        this._retryPeer(peerId)
+        this._reportError(error)
+      }
+    }
+  }
+
   _updatePeerState(peerId) {
     const connection = this.connections.get(peerId)
     if (!connection) return
@@ -361,14 +433,65 @@ export class GameLinkClient {
     if (connection.connectionState === 'connected'
       && channels?.control?.readyState === 'open'
       && channels?.state?.readyState === 'open') {
+      clearTimeout(this.retryTimers.get(peerId))
+      this.retryTimers.delete(peerId)
+      this.retryAttempts.delete(peerId)
+      const recovered = this.connectedOnce.has(peerId)
+      const changed = this.peerStates.get(peerId) !== 'connected'
+      this.connectedOnce.add(peerId)
+      this.peerHeartbeatAt.set(peerId, Date.now())
+      this.peerHeartbeatPending.delete(peerId)
       this._setPeerState(peerId, 'connected')
+      if (changed) this._emit('peer-ready', { peerId, generation: this.generations.get(peerId), recovered })
       this._updateIceAddresses(peerId, connection)
       this._logConnection(peerId, connection)
-    } else if (connection.connectionState === 'failed' || connection.connectionState === 'closed') {
-      this._setPeerState(peerId, 'relay')
+    } else if (connection.connectionState === 'failed' || connection.connectionState === 'closed' || connection.connectionState === 'disconnected') {
+      this._retryPeer(peerId)
     } else {
-      this._setPeerState(peerId, 'connecting')
+      this._setPeerState(peerId, this.retryAttempts.has(peerId) ? 'reconnecting' : 'connecting')
+      this._watchConnection(peerId)
     }
+  }
+
+  _watchConnection(peerId) {
+    if (this.disposed || !this.members.some(m => m.id === peerId) || this.peerStates.get(peerId) === 'connected' || this.retryTimers.has(peerId)) return
+    this.retryTimers.set(peerId, setTimeout(() => {
+      this.retryTimers.delete(peerId)
+      this._retryPeer(peerId)
+    }, 15000))
+  }
+
+  _retryPeer(peerId) {
+    if (this.disposed || !this.members.some(m => m.id === peerId)) return
+    // Replace the negotiation timeout once; repeated error events must not delay retry.
+    if (this.peerStates.get(peerId) === 'reconnecting' && this.retryTimers.has(peerId)) return
+    clearTimeout(this.retryTimers.get(peerId))
+    const attempt = (this.retryAttempts.get(peerId) || 0) + 1
+    this.retryAttempts.set(peerId, attempt)
+    this._setPeerState(peerId, 'reconnecting')
+    const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt - 1, 5)) + Math.floor(Math.random() * 500)
+    this.retryTimers.set(peerId, setTimeout(async () => {
+      this.retryTimers.delete(peerId)
+      if (this.disposed || !this.members.some(m => m.id === peerId)) return
+      try {
+        if (this.selfMember.id.localeCompare(peerId) < 0) {
+          // Only the deterministic offerer rebuilds the pair, avoiding offer glare.
+          await this._sendSignal(peerId, 'webrtc_restart', {})
+          if (this.disposed || !this.members.some(m => m.id === peerId)) return
+          const old = this.connections.get(peerId)
+          this.connections.delete(peerId)
+          old?.close()
+          this.channels.delete(peerId)
+          this.pendingIce.delete(peerId)
+          this.localIceAddresses.delete(peerId)
+          this.remoteIceAddresses.delete(peerId)
+          this._ensurePeerConnection(this.members.find(m => m.id === peerId))
+        } else {
+          await this._sendSignal(peerId, 'webrtc_retry', { generation: this.generations.get(peerId) || 0 })
+        }
+      } catch (error) { this._reportError(error) }
+      this._watchConnection(peerId)
+    }, delay))
   }
 
   _setPeerState(peerId, state) {
@@ -380,6 +503,8 @@ export class GameLinkClient {
     this._emit('peer-state', {
       peerId,
       state,
+      attempt: this.retryAttempts.get(peerId) || 0,
+      generation: this.generations.get(peerId) || 0,
       localIce: this.localIceAddresses.get(peerId) || '',
       remoteIce: this.remoteIceAddresses.get(peerId) || '',
     })
@@ -451,60 +576,79 @@ export class GameLinkClient {
     try {
       await connection.setLocalDescription(await connection.createOffer())
       const description = connection.localDescription
-      if (description) await this._sendSignal(peerId, 'webrtc_offer', { type: description.type, sdp: description.sdp })
+      if (this.disposed || this.connections.get(peerId) !== connection) return
+      if (description) await this._sendSignal(peerId, 'webrtc_offer', { type: description.type, sdp: description.sdp, generation: this.generations.get(peerId) })
     } catch (error) {
-      this._setPeerState(peerId, 'relay')
+      if (this.disposed || this.connections.get(peerId) !== connection) return
+      this._retryPeer(peerId)
       this._reportError(error)
     }
   }
 
   async _receiveSignal(signal) {
-    if (signal.kind === 'game_relay') {
-      const payload = signal.payload || {}
-      this._emit('message', {
-        from: signal.from,
-        kind: payload.kind,
-        payload: payload.payload,
-        sent_at: signal.sent_at,
-        transport: 'server-forwarding',
-      })
-      return
-    }
-    if (!signal.kind.startsWith('webrtc_')) {
-      this._emit('message', {
-        from: signal.from,
-        kind: signal.kind,
-        payload: signal.payload,
-        sent_at: signal.sent_at,
-        transport: 'server-event',
-      })
-      return
-    }
+    if (this.disposed || !signal.kind.startsWith('webrtc_') || !this.members.some(m => m.id === signal.from)) return
     const member = this.members.find((entry) => entry.id === signal.from)
       || { id: signal.from, name: signal.from, virtual_ip: '', endpoint: '' }
-    if (signal.kind === 'webrtc_restart') {
-      this.connections.get(signal.from)?.close()
-      this.connections.delete(signal.from)
-      this.channels.delete(signal.from)
-      this.pendingIce.delete(signal.from)
-      this.peerStates.delete(signal.from)
-      this.localIceAddresses.delete(signal.from)
-      this.remoteIceAddresses.delete(signal.from)
-      this._ensurePeerConnection(member)
+    const peerId = signal.from
+    const offerer = this.selfMember.id.localeCompare(peerId) < 0
+    if (signal.kind === 'webrtc_retry' || signal.kind === 'webrtc_restart') {
+      if (offerer) {
+        const observed = signal.payload?.generation
+        if (signal.kind === 'webrtc_retry' && ((observed > 0 && observed < (this.generations.get(peerId) || 0)) || (!observed && this.peerStates.get(peerId) === 'connected'))) return
+        if (Number.isSafeInteger(observed) && observed > 0) this.lastGeneration = Math.max(this.lastGeneration, observed)
+        this._retryPeer(peerId)
+      }
       return
     }
-    const connection = this._ensurePeerConnection(member)
+    const payload = { ...(signal.payload || {}) }
+    const generation = payload.generation
+    delete payload.generation
+    if (!Number.isSafeInteger(generation) || generation <= 0) return
+    const active = this.generations.get(peerId) || 0
+    if (generation < active) return
+    if (signal.kind === 'webrtc_offer') {
+      if (offerer || generation === active) return
+      clearTimeout(this.retryTimers.get(peerId))
+      this.retryTimers.delete(peerId)
+      const old = this.connections.get(peerId)
+      this.connections.delete(peerId)
+      old?.close()
+      this.channels.delete(peerId)
+      this.pendingIce.delete(peerId)
+      this.localIceAddresses.delete(peerId)
+      this.remoteIceAddresses.delete(peerId)
+      this._ensurePeerConnection(member, generation)
+      const queued = this.futureIce.get(peerId)
+      if (queued?.generation === generation) this.pendingIce.set(peerId, queued.candidates)
+      this.futureIce.delete(peerId)
+    } else if (generation !== active) {
+      // ICE may overtake the offer because HTTP signal requests are independent.
+      if (!offerer && signal.kind === 'webrtc_ice' && payload.candidate && !/ typ relay(?: |$)/.test(payload.candidate)) {
+        let queued = this.futureIce.get(peerId)
+        if (!queued || generation > queued.generation) {
+          queued = { generation, candidates: [] }; this.futureIce.set(peerId, queued)
+        }
+        if (queued.generation === generation && queued.candidates.length < 64) queued.candidates.push(payload)
+      }
+      return
+    }
+    const connection = this.connections.get(peerId)
     if (!connection) return
-    const payload = signal.payload || {}
+    const current = () => !this.disposed && this.connections.get(peerId) === connection
+    if (payload.sdp) payload.sdp = payload.sdp.split("\r\n").filter(line => !/^a=candidate:.* typ relay(?: |$)/.test(line)).join("\r\n")
+    if (payload.candidate && / typ relay(?: |$)/.test(payload.candidate)) return
     try {
       if (signal.kind === 'webrtc_offer') {
         await connection.setRemoteDescription(payload)
+        if (!current()) return
         await this._applyPendingIce(signal.from, connection)
+        if (!current()) return
         await connection.setLocalDescription(await connection.createAnswer())
         const description = connection.localDescription
-        if (description) await this._sendSignal(signal.from, 'webrtc_answer', { type: description.type, sdp: description.sdp })
+        if (current() && description) await this._sendSignal(signal.from, 'webrtc_answer', { type: description.type, sdp: description.sdp, generation })
       } else if (signal.kind === 'webrtc_answer') {
         await connection.setRemoteDescription(payload)
+        if (!current()) return
         await this._applyPendingIce(signal.from, connection)
       } else if (signal.kind === 'webrtc_ice') {
         if (payload.candidate) this._rememberIceCandidate(this.remoteIceAddresses, signal.from, payload.candidate)
@@ -512,7 +656,8 @@ export class GameLinkClient {
         else if (payload.candidate) this.pendingIce.set(signal.from, [...(this.pendingIce.get(signal.from) || []), payload])
       }
     } catch (error) {
-      this._setPeerState(signal.from, 'relay')
+      if (this.disposed || this.connections.get(signal.from) !== connection) return
+      this._retryPeer(signal.from)
       this._reportError(error)
     }
   }
@@ -524,7 +669,7 @@ export class GameLinkClient {
   }
 
   async _sendSignal(to, kind, payload) {
-    if (!this.room || !this.selfMember) throw new Error('not connected to a room')
+    if (this.disposed || !this.room || !this.selfMember) throw new Error('not connected to a room')
     await this._request(`/v1/rooms/${encodeURIComponent(this.room.code)}/signals`, 'POST', {
       from: this.selfMember.id,
       to,
@@ -536,6 +681,7 @@ export class GameLinkClient {
   async _request(path, method = 'GET', payload) {
     const response = await fetch(`${this.serverUrl}${path}`, {
       method,
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
       headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: payload === undefined ? undefined : JSON.stringify(payload),
     })

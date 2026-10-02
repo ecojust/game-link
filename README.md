@@ -2,7 +2,7 @@
 
 GameLink is a multiplayer room and signaling service with browser game demos and client SDKs. Rooms are scoped by a stable `game_id`, so players can only join a room for the same game.
 
-Gameplay uses WebRTC peer-to-peer (P2P) DataChannels when a direct connection succeeds. The server handles rooms, presence, and WebRTC signaling. SDKs may use the server's queued HTTP message fallback when supported; this is not a TURN service or a general UDP relay. GameLink does not create a virtual LAN, so games need to integrate an SDK or provide their own compatible network layer.
+Gameplay uses WebRTC peer-to-peer (P2P) DataChannels. Every player is an equal peer; the server does not assign a gameplay host or simulate matches. It handles rooms, presence, and WebRTC signaling, but does not relay game traffic or provide TURN. GameLink does not create a virtual LAN, so games need to integrate an SDK or provide their own compatible network layer.
 
 ## Games
 
@@ -11,7 +11,7 @@ Gameplay uses WebRTC peer-to-peer (P2P) DataChannels when a direct connection su
 | `tank-arena`  | Multiplayer tank arena                                  | 2–16    |
 | `fc-mini-4wd` | Three.js FC-style car combat, **激斗四驱车** | 1–16    |
 
-The browser hub lists active rooms with their game name, game ID, and player count, and lets players create or join a game-specific room. New players can join while a match is running.
+The browser hub lists active rooms with their game name, game ID, and player count, and lets players create or join a game-specific room. Any player can join a created room, and new players can join while a match is running.
 
 ## Repository layout
 

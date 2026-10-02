@@ -1,4 +1,4 @@
-// FC-style car combat. The room host owns damage, pickups, AI and stage transitions.
+// FC-style car combat. Every peer runs a local replica of the deterministic simulation; inputs and newer snapshots sync over P2P.
 export const COLS = 128, ROWS = 100, TILE = 2, WIDTH = COLS * TILE, HEIGHT = ROWS * TILE
 export const PAINTS = ['#f8f8e8', '#ef5058', '#42b9ef', '#f3c44d', '#ae78ed', '#59d192']
 export type Tile = 'road' | 'grass' | 'water' | 'bridge' | 'wall' | 'rock' | 'oil' | 'tree' | 'ruin'
@@ -8,7 +8,7 @@ export type Driver = { id: string; name: string }
 export type Car = Driver & { bot: boolean; x: number; z: number; vx: number; vz: number; angle: number; hp: number; score: number; kills: number; paint: string; model: number; turbo: number; suspension: boolean; star: number; spin: number; hurt: number; dead: number; attacker: string }
 export type Pickup = { id: string; x: number; z: number; kind: 'fuel' | 'turbo' | 'suspension' | 'star' | 'flag' | 'crown' }
 export type Spark = { id: number; x: number; z: number; age: number; big: boolean }
-export type World = { protocol: 3; rev: number; stage: number; mode: Mode; phase: 'playing' | 'clear' | 'over' | 'complete'; time: number; kills: number; goal: number; spawned: number; cars: Car[]; pickups: Pickup[]; broken: number[]; sparks: Spark[]; winner: string }
+export type World = { protocol: 4; rev: number; stage: number; mode: Mode; phase: 'playing' | 'clear' | 'over' | 'complete'; time: number; kills: number; goal: number; spawned: number; cars: Car[]; pickups: Pickup[]; broken: number[]; sparks: Spark[]; winner: string }
 export const idleInput = (): Input => ({ x: 0, z: 0, gas: false, brake: false })
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 export const angleDelta = (a: number, b: number) => Math.atan2(Math.sin(b - a), Math.cos(b - a))
@@ -66,7 +66,7 @@ export function createCar(driver: Driver, index: number, bot = false): Car {
   return { id: driver.id, name: driver.name, bot, x: 9 + (index % 8) * 8, z: bot ? HEIGHT - 9 : 9 + Math.floor(index / 8) * 5, vx: 0, vz: 0, angle: bot ? -Math.PI / 2 : Math.PI / 2, hp: 100, score: 0, kills: 0, paint: bot ? '#ef5058' : PAINTS[hash(driver.id) % PAINTS.length]!, model: 0, turbo: 0, suspension: false, star: 2, spin: 0, hurt: 0, dead: 0, attacker: '' }
 }
 export function createWorld(drivers: Driver[], stage = 1, mode: Mode = 'coop'): World {
-  const world: World = { protocol: 3, rev: 0, stage, mode, phase: 'playing', time: 0, kills: 0, goal: mode === 'coop' ? 8 + stage * 2 : 10, spawned: 0, cars: drivers.map((d, i) => createCar(d, i)), pickups: [], broken: [], sparks: [], winner: '' }
+  const world: World = { protocol: 4, rev: 0, stage, mode, phase: 'playing', time: 0, kills: 0, goal: mode === 'coop' ? 8 + stage * 2 : 10, spawned: 0, cars: drivers.map((d, i) => createCar(d, i)), pickups: [], broken: [], sparks: [], winner: '' }
   const kinds: Pickup['kind'][] = ['fuel', 'turbo', 'suspension', 'star', 'flag']
   const positions = [[20, 35], [59, 22], [9, 48], [68, 48], [40, 34]]
   kinds.forEach((kind, i) => world.pickups.push({ id: `item-${i}`, x: positions[i]![0]!, z: positions[i]![1]!, kind }))

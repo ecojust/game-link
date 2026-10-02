@@ -17,8 +17,8 @@ const label = computed(() => {
   const peers = members.value.filter(m => m.id !== self.value?.id)
   if (!peers.length) return '等待队友'
   const direct = peers.filter(m => states[m.id] === 'connected').length
-  const relay = peers.filter(m => states[m.id] === 'relay').length
-  return direct + relay < peers.length ? '连接协商中' : direct === peers.length ? 'P2P 直连' : relay === peers.length ? '服务器转发' : '混合连接'
+  if (peers.some(m => states[m.id] === 'reconnecting')) return 'P2P 重连中'
+  return direct === peers.length ? 'P2P 直连' : 'P2P 连接中'
 })
 async function leave() {
   ready.value = false
@@ -36,6 +36,7 @@ onMounted(async () => {
       if (value.state === 'connected') { local[value.peerId] = value.localIce; remote[value.peerId] = value.remoteIce }
       else { delete local[value.peerId]; delete remote[value.peerId] }
     })
+    session.on('peer-ready', () => { error.value = '' })
     session.on('error', reason => { error.value = reason.message })
     session.on('room-closed', () => { ready.value = false; error.value = '房间已关闭，请返回大厅重新加入。' })
     const result = await session.joinFromLocation()

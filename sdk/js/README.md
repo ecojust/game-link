@@ -1,6 +1,6 @@
 # GameLink JavaScript SDK
 
-A browser-first JavaScript SDK for GameLink room membership, WebRTC signaling, peer discovery, and game messages. It supports game-scoped rooms and sends each peer message over WebRTC DataChannels whenever the peer connection is open. When direct ICE fails, the current server signaling queue can carry messages as a limited HTTP fallback; this is not a TURN relay.
+A browser-first JavaScript SDK for GameLink room membership, WebRTC signaling, peer discovery, and game messages. It supports game-scoped rooms and sends each peer message over WebRTC DataChannels whenever the peer connection is open. Game messages use direct P2P only. Failed connections are retried continuously; no HTTP fallback or TURN candidates are used.
 
 ## Use from this repository
 
@@ -31,7 +31,7 @@ game.send('chat', { text: 'hello' }, { reliability: 'reliable' })
 await game.leave()
 ```
 
-`broadcast` uses the room signaling/event API and is suited to small, infrequent lobby events. `send` uses WebRTC DataChannels and can target a peer with `{ target: peerId }`; unreliable messages use the unordered state channel, while reliable messages use the control channel. The SDK manages create/join, room refresh, member discovery, heartbeat, SDP/ICE exchange, connection cleanup, and the current server-forwarding fallback.
+`broadcast` now uses reliable P2P DataChannels, just like `send` to all peers. `send` uses WebRTC DataChannels and can target a peer with `{ target: peerId }`; unreliable messages use the unordered state channel, while reliable messages use the control channel. The SDK manages create/join, room refresh, member discovery, heartbeat, SDP/ICE exchange, connection cleanup, and automatic P2P reconnection.
 
 The browser SDK requires a secure context (HTTPS or localhost) and browser WebRTC support. `gameId` is required and must match the ID used to create the room. Native games need a platform-specific SDK and transport integration; this browser package does not create a virtual network adapter.
 
@@ -41,4 +41,50 @@ After a successful create or join, the SDK keeps the server-issued room resume t
 
 平台跳转统一使用 `gameid`、`room`、`username` 三个查询参数。游戏端调用 `GameLinkClient.fromLocation(options)`，注册事件后 `await client.joinFromLocation()`。默认 API 地址为 SDK 模块所在域名，可用 `serverUrl` 显式覆盖。
 
-大厅使用 `await client.createLaunchUrl(entryUrl)`，通过 `create_only: true` 仅创建空房间并预留房主昵称，不创建玩家、不启动连接。返回地址仅包含 `gameid`、`room`、`username`，没有交接 fragment。游戏端 `joinFromLocation()` 正式加入后成为房主；房主进入前其他昵称暂不能加入，空房间两分钟过期。昵称不是身份凭证。刷新凭证留在 sessionStorage，主动 leave 清除。传统 `createRoom()` 仍保留创建并加入的行为，兼容直接由游戏发起的开局。
+大厅使用 `await client.createLaunchUrl(entryUrl)`，通过 `create_only: true` 创建没有玩家归属的空房间，不创建玩家、不启动连接。返回地址仅包含 `gameid`、`room`、`username`，没有交接 fragment。游戏端 `joinFromLocation()` 加入后，各玩家在游戏协议中平等；服务端不分配房主，也不授予首位加入者额外权限。空房间两分钟过期。游戏消息只通过 WebRTC DataChannel 在玩家间直传；HTTP 接口负责房间、心跳和建连信令，不转发游戏消息。昵称不是身份凭证。刷新凭证留在 sessionStorage，主动 leave 清除。传统 `createRoom()` 仍保留创建并加入的行为，兼容直接由游戏发起的开局。
+
+## P2P-only 重连
+
+本版本只允许 JS SDK 的游戏消息通过 P2P DataChannel 发送，`broadcast` 也不再调用服务器 events API。服务器仍负责房间、成员、心跳以及 SDP/ICE 信令。传入的 TURN URL 与对端 relay 候选会被过滤，旧客户端的服务器游戏转发消息会被忽略。
+
+协商 15 秒未完成或连接/通道失败会重试，以 1、2、4、8、16、30 秒的上限退避并加少量随机延迟；只由固定的一方重建连接并发起 offer，另一方请求重连。成功后重置退避，离开和销毁时清理定时器。状态为 `connecting`、`reconnecting`、`connected`、`closed`。双方都应更新 SDK。
+
+未连通时不缓存游戏消息；`send` 会对每个不可用的目标触发 `delivery-skipped`（peerId、kind、reason）。游戏应在 `connected` 事件后重新发送当前快照。可靠通道只保证已建立连接内的传输，不保证断线期间的事件送达。某些 NAT/防火墙无法直接互通，持续重试不保证最终成功。
+
+### 重连与游戏状态恢复
+
+双方必须使用同一版 SDK。Offer、Answer、ICE 携带 `generation`，由固定发起方生成递增批次；旧批次和无批次信令被丢弃。先于 Offer 到达的 ICE 按批次缓存，最多 64 条。新连接替代旧连接后，旧连接的回调不再交付消息。
+
+`peer-state` 新增 `attempt` 和 `generation`。新增 `peer-ready` 事件，在首次连接或断线恢复时触发一次（ICE 地址更新不会重复触发）：
+
+```js
+client.on('peer-ready', ({ peerId, recovered, generation }) => {
+  // 无论首次连接还是恢复，都通过可靠通道发送最新完整状态。
+  client.send('snapshot', currentState(), { target: peerId, reliability: 'reliable' })
+  client.send('snapshot-request', {}, { target: peerId, reliability: 'reliable' })
+})
+```
+
+SDK 不理解游戏状态，完整快照的授权、版本检查和应用由游戏实现。不要重放断线期间的攻击等一次性操作。坦克会暂停战斗并交换玩家状态和准备状态；四驱车停止断线玩家输入，恢复后从任一在线玩家接收世界快照并重置输入序号检查。游戏逻辑不依赖某位玩家持续处于前台。
+
+HTTP 请求默认 8 秒超时，可用 `requestTimeoutMs` 配置，避免信令网络黑洞永久占用轮询。超过服务端成员保留时间后，需要重新加入房间。
+
+### 故障测试
+
+```sh
+node --test sdk/js/gamelink.test.mjs
+npm run build --prefix game_web
+# 启动本地服务端（可用 API_URL 指定已有的测试服务端）
+GAMELINK_BIND=127.0.0.1:18088 GAMELINK_HEARTBEAT_TIMEOUT_SECS=120 cargo run --manifest-path server/Cargo.toml
+# 另一个终端，需可导入 playwright 及可用的 Chromium
+node sdk/js/tests/browser-network.mjs
+```
+
+浏览器脚本支持 `PLAYWRIGHT_MODULE`（外部 playwright 包的绝对路径）和 `CHROME_PATH`（Chrome 可执行文件路径）。测试启动临时静态站点，用两个浏览器上下文运行实际游戏，关闭 RTC 连接并阻断 HTTP 后恢复，检查旧 ICE 丢弃、页面提示及刷新后的同步。此故障注入不等价于跨运营商 NAT、真实 UDP 丢包或手机切网验证。
+
+
+### 房间成员、ICE 与 P2P 心跳
+
+`joinRoom` 返回的 `room.members`、`members` 事件，以及每次 `/signals/poll` 返回的 `members` 都是房间当前其他成员数组；`selfMember` 是本机成员。服务端已有成员汇总和超时清理，无需新增 ICE 汇总接口。成员上的 `endpoint` 是服务端看到的 HTTP 传输端点，不是 ICE 地址。ICE 候选和选中的 ICE 地址由每一对浏览器各自协商，并通过 `peer-state.localIce` / `remoteIce` 提供；它们不是可由服务器准确汇总后供所有客户端复用的公共地址。
+
+JS SDK 已在 `control` DataChannel 上增加内部 P2P ping/pong：默认每 4 秒探测，12 秒没有收到该 peer 的任何 P2P 数据则转为重连状态。`send()` 和 `broadcast()` 只向 SDK 标记为 `connected` 且通道打开的 peer 发游戏数据；其他 peer 触发 `delivery-skipped`，状态恢复后游戏通过 `peer-ready` 发送新快照。可用 `peerHeartbeatIntervalMs` 和 `peerTimeoutMs` 配置阈值。该心跳不经过服务器。服务器侧 HTTP 心跳仍独立维护房间成员存在状态。

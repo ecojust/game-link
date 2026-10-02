@@ -60,3 +60,5 @@ body:has(.fc-playing){overflow:hidden;overscroll-behavior:none}
   .fc-ab>div:last-child { transform: translateY(-12px); }
   .fc-menu { max-height: calc(100dvh - 54px - env(safe-area-inset-top)); }
 }
+
+.network-recovery { position:absolute; z-index:8; top:12px; left:50%; transform:translateX(-50%); max-width:90%; width:max-content; padding:10px 16px; border:1px solid #ffcb79; border-radius:10px; background:#282015ed; color:#ffe4ad; font-size:13px; text-align:center; pointer-events:none; }
