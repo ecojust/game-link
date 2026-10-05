@@ -19,3 +19,7 @@
 /game_web/public/tank/assets/
 /game_web/public/four-wheel/assets/
 /game_web/public/gamelink.js
+
+# Unified server runtime secrets
+server/.env
+server/deploy/*.env

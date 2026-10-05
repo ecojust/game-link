@@ -1,6 +1,6 @@
 # GameLink JavaScript SDK
 
-A browser-first JavaScript SDK for GameLink room membership, WebRTC signaling, peer discovery, and game messages. It supports game-scoped rooms and sends each peer message over WebRTC DataChannels whenever the peer connection is open. Game messages use direct P2P only. Failed connections are retried continuously; no HTTP fallback or TURN candidates are used.
+A browser-first JavaScript SDK for GameLink room membership, WebRTC signaling, peer discovery, and game messages. It supports game-scoped rooms and sends each peer message over WebRTC DataChannels whenever the peer connection is open. Game messages use WebRTC DataChannels with LAN, STUN and authenticated TURN fallback. No HTTP game-message fallback is used.
 
 ## Use from this repository
 
@@ -43,11 +43,11 @@ After a successful create or join, the SDK keeps the server-issued room resume t
 
 大厅使用 `await client.createLaunchUrl(entryUrl)`，通过 `create_only: true` 创建没有玩家归属的空房间，不创建玩家、不启动连接。返回地址仅包含 `gameid`、`room`、`username`，没有交接 fragment。游戏端 `joinFromLocation()` 加入后，各玩家在游戏协议中平等；服务端不分配房主，也不授予首位加入者额外权限。空房间两分钟过期。游戏消息只通过 WebRTC DataChannel 在玩家间直传；HTTP 接口负责房间、心跳和建连信令，不转发游戏消息。昵称不是身份凭证。刷新凭证留在 sessionStorage，主动 leave 清除。传统 `createRoom()` 仍保留创建并加入的行为，兼容直接由游戏发起的开局。
 
-## P2P-only 重连
+## WebRTC 重连
 
-本版本只允许 JS SDK 的游戏消息通过 P2P DataChannel 发送，`broadcast` 也不再调用服务器 events API。服务器仍负责房间、成员、心跳以及 SDP/ICE 信令。传入的 TURN URL 与对端 relay 候选会被过滤，旧客户端的服务器游戏转发消息会被忽略。
+游戏消息通过 WebRTC DataChannel 发送，可以直连或经 TURN 中继。`broadcast` 不调用服务器 events API。信令服务负责房间、成员、心跳以及 SDP/ICE 信令，旧客户端的 HTTP 游戏转发消息会被忽略。
 
-协商 15 秒未完成或连接/通道失败会重试，以 1、2、4、8、16、30 秒的上限退避并加少量随机延迟；只由固定的一方重建连接并发起 offer，另一方请求重连。成功后重置退避，离开和销毁时清理定时器。状态为 `connecting`、`reconnecting`、`connected`、`closed`。双方都应更新 SDK。
+各阶段超时或连接/通道失败会重试，以 1、2、4、8、16、30 秒的上限退避并加少量随机延迟；只由固定的一方重建连接并发起 offer，另一方请求重连。成功后重置退避，离开和销毁时清理定时器。状态为 `connecting`、`reconnecting`、`connected`、`closed`。双方都应更新 SDK。
 
 未连通时不缓存游戏消息；`send` 会对每个不可用的目标触发 `delivery-skipped`（peerId、kind、reason）。游戏应在 `connected` 事件后重新发送当前快照。可靠通道只保证已建立连接内的传输，不保证断线期间的事件送达。某些 NAT/防火墙无法直接互通，持续重试不保证最终成功。
 
@@ -97,10 +97,80 @@ JS SDK 已在 `control` DataChannel 上增加内部 P2P ping/pong：默认每 4 
 
 SDK 监听浏览器 `icecandidateerror`，将失败服务 URL、浏览器错误码、原因和对端 ID 通过 `stun-status` 事件返回。收到 `srflx` 公网候选时状态为 `available`；收集结束后，没有公网候选且所有配置服务都有失败记录时为 `failed`，否则为 `unconfirmed`（不能仅根据缺少公网候选断言服务不可达）。
 
-失败同时通过现有 `error` 事件显示中文提示，所有游戏无需另接错误 UI。错误名称 `GameLinkStunError`，`code` 分别为 `STUN_SERVER_ERROR`、`STUN_ALL_FAILED`、`STUN_NO_PUBLIC_CANDIDATE`、`STUN_TIMEOUT`。10 秒内无公网候选时提示检测超时（不将超时等同于服务不可达），避免连接重试在浏览器报告错误之前重建连接而长期没有提示。同类同地址提示在 60 秒内去重，避免多对端与持续重试刷屏。失败提示不会中止局域网直连，也不代表某个服务失败就必然无法联机。STUN 请求由玩家浏览器发起，服务端无法替玩家网络判断可达性。不同浏览器的错误事件支持和报告时机可能不同。
+失败通过 `stun-status` 事件和 debug 日志记录，不再显示页面错误提示。错误名称 `GameLinkStunError`，`code` 分别为 `STUN_SERVER_ERROR`、`STUN_ALL_FAILED`、`STUN_NO_PUBLIC_CANDIDATE`、`STUN_TIMEOUT`。3 秒内无公网候选时提示检测超时（不将超时等同于服务不可达），避免连接重试在浏览器报告错误之前重建连接而长期没有提示。同类同地址提示在 60 秒内去重，避免多对端与持续重试刷屏。失败提示不会中止局域网直连，也不代表某个服务失败就必然无法联机。STUN 请求由玩家浏览器发起，服务端无法替玩家网络判断可达性。不同浏览器的错误事件支持和报告时机可能不同。
 
 ### 默认 STUN 地址
 
-参照[国内可访问的 STUN 服务器](https://zhuanlan.zhihu.com/p/1928418712958010287)的地址列表，新增 `stun.miwifi.com:3478`、`stun.antisip.com:3478`、`stun.linphone.org:3478`、`stun.zadarma.com:3478`，保留 Google `stun.l.google.com:19302` 与 Cloudflare `stun.cloudflare.com:3478`，共六个默认服务。浏览器 ICE 会收集这些服务的候选，选择能连通的候选；不是按数组顺序逐个尝试。
+默认使用自建 STUN `stun:111.229.154.132:3478`。客户端保留错误地址、错误码和 3 秒超时诊断；可通过 `iceServers` 显式覆盖。STUN 用于获取公网候选地址，不提供 TURN 中继。
 
-文章记录的是作者 2025-07-15 的网络验证结果，不代表当前所有运营商网络都可达。SDK 保留逐地址失败、全部失败和超时诊断；调用者仍可通过 `iceServers` 覆盖默认列表。没有增加 TURN 中继。独立游戏入口与 SDK 导入的缓存参数随文件内容变化，保证发布新配置后浏览器获取新版本。
+文章记录的是作者 2025-07-15 的网络验证结果，不代表当前所有运营商网络都可达。SDK 保留逐地址失败、全部失败和超时诊断；调用者仍可通过 `iceServers` 覆盖默认列表。1.3 已增加 TURN 回退。独立游戏入口与 SDK 导入的缓存参数随文件内容变化，保证发布新配置后浏览器获取新版本。
+
+### WebRTC 控制台诊断
+
+控制台筛选 `[GameLink RTC]`（Info 级别）。日志按 room/self/peer/generation 关联，依次记录 `room.join.ok`、`peer.create`、`signal.send/sent/receive`、`sdp.remote-set`、`ice.local/remote-applied`、`stun.available`、`peer.connection` 和 `channel.open`。`signal.sent` 表示服务端接受信令，只有接收端 `signal.receive` 能证明接收。
+
+连接成功或重试前输出 `ice.summary`，包含候选类型、ICE 检查请求和响应数量、选中状态及数据通道状态。双方 SDP 已设置但 responsesReceived 为 0，表示 ICE 尚未探测到可用路径；STUN 成功不等于 P2P 已连接。日志不输出认证令牌、完整 SDP 或游戏消息，候选 IP/端口仅在本机控制台展示。
+
+## 1.3 分级连接
+
+每对成员按局域网（4 秒）→ STUN 公网直连（12 秒）→ TURN 中继（20 秒）的顺序协商。服务端 `/network` 提供默认地址，`/turn` 在进入中继阶段时返回临时凭证。显式传入 `iceServers` 可以覆盖默认配置。`peer-state.networkStage` 表示阶段，消息 `transport` 为 `p2p` 或 `turn`。中继需要升级服务端并开放 TURN 及中继端口。
+
+## 日志与玩家连接接口
+
+SDK 不自动注入应用的顶部按钮。应用自行绘制“日志”和“玩家连接”入口，再调用 `getLogs(options)` / `getConnections(options)`。两个接口都有两种模式：
+
+- `type: 'dialog'` 或省略 `type`：打开 SDK 默认弹窗，返回实时数据句柄。
+- `type: 'data'`：只返回实时数据句柄，不创建任何元素、不访问 DOM，应用可以完全自定义展示。
+
+### 默认弹窗
+
+```js
+// 在应用自己的按钮事件里调用。
+const logs = client.getLogs() // 等价于 { type: 'dialog' }
+const connections = client.getConnections({ type: 'dialog', maxMembers: 4 })
+
+// 也可由应用主动关闭；弹窗支持关闭按钮、Esc 和点击外侧关闭。
+logs.close()
+connections.close()
+```
+
+默认弹窗使用浏览器顶层 modal dialog，样式通过 Shadow DOM 隔离，不被游戏画布的层级、transform 或 overflow 裁切。日志弹窗与连接弹窗分别独立调用。应用如果希望同时只开一个，先 `close()` 上一个句柄。
+
+### 只返回实时数据
+
+```js
+const connections = client.getConnections({
+  type: 'data',
+  maxMembers: 4,
+  onChange(snapshot) {
+    // 立即返回当前快照；成员、连接状态、ICE 或连接方式变化时继续通知。
+    renderMyConnectionPanel(snapshot)
+  },
+})
+
+console.log(connections.data) // 随时读取最新快照
+// { roomCode, selfId, memberCount, maxMembers, disposed, players }
+// players: [{ id, name, isSelf, state, transport, networkStage,
+//             attempt, generation, localIce, remoteIce }]
+// state: local / connecting / connected / reconnecting / closed
+// transport: p2p / turn / null；非 connected 状态为 null
+// networkStage: lan / stun / turn；本机为 null
+
+const logs = client.getLogs({ type: 'data' })
+// data 为最近 2000 条已脱敏日志数组，包含 time、stage 及诊断字段。
+const unsubscribe = logs.subscribe(entries => renderMyLogPanel(entries))
+// subscribe 也会立即通知一次，之后持续通知。
+
+// 页面或自定义面板销毁时释放订阅。
+unsubscribe()
+logs.dispose()
+connections.dispose()
+```
+
+两个接口返回 `{ type, data, subscribe, dispose, close }`；`data` 是不可修改的独立快照，旧快照不会随之后事件改变，应用无法通过修改它影响 SDK 内部状态。`onChange` 与 `subscribe` 接收同样的数据。`subscribe` 返回取消该监听的函数；`dispose` / `close` 释放整个句柄的监听并关闭其弹窗，可重复调用。SDK 销毁时先推送最终连接快照（`disposed: true`、人数为 0、玩家为空），再自动释放所有句柄。
+
+调用 `getLogs` 时会在该句柄存续期间采集诊断日志，无需 `debug: true`；关闭后若其他日志句柄和 debug 均未启用则停止内存采集。若要保留打开窗口之前的日志，在加入前使用 `new GameLinkClient({ gameId, playerName, debug: true })` 或 `GameLinkClient.fromLocation({ debug: true })`。日志记录房间请求、信令、ICE、STUN/TURN、连接及重试事件；过滤游戏数据，隐藏凭证、TURN 密钥和 SDP。STUN 失败只进入诊断日志，不触发页面 error 提示。
+
+旧 `mountConnectionBanner` 暂保留兼容并标为 deprecated，内部调用上述接口。内置应用已迁移为自行渲染按钮和人数，使用 data 模式订阅状态，点击按钮时调用默认 dialog 模式。
+
+退出先停止轮询和关闭旧连接，再提交退出请求；清理凭证时只删除旧会话自己的凭证。新会话忽略旧轮询、刷新和心跳响应，失效恢复凭证清除后按新成员加入。最后一人退出后房间立即删除；仍有其他成员时可以重新加入。

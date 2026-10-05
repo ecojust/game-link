@@ -117,3 +117,57 @@
 - 回滚备份 `/home/b14f/games-previous-20261005-110140`。
 - 35 个公网资源 SHA-256 与本地构建一致，覆盖全部九个游戏的入口、脚本及 SDK；房间 API 正常，服务 active，健康接口 status ok / 1.2.0。
 - 本次核对配置发布，未验证各玩家网络的 STUN 可达性或真实跨网络联机，未新增 TURN。
+
+## 2026-10-05 11:25（Asia/Shanghai）自建 STUN 客户端发布
+
+- 构建版本 `26.1005.1124`，所有网页游戏默认改为 `stun:111.229.154.132:3478`，保留错误与超时诊断以及显式 iceServers 覆盖。
+- 回滚备份 `/home/b14f/games-previous-20261005-112503`。
+- 部署完成后十份线上 SDK SHA-256 与本地构建一致，房间 API 正常，gamelink-server 与 gamelink-stun 均 active，健康接口 status ok / 1.2.0。
+- TCP 公网 STUN Binding 成功；UDP 抓包确认服务器收到请求并回复，但测试端未收到回包。尚未确认真实玩家网络的浏览器 STUN 候选或跨网络联机。
+
+## 2026-10-05 11:38 自建 STUN 服务复测
+
+- 更新 coturn 配置并重启，备份 `/opt/gamelink-stun-backup-20261005-113819`。
+- 公网直连路径三次 UDP、三次 TCP Binding 均通过；经仅本地诊断转发的浏览器 WebRTC 成功获取 srflx。
+- 本地 utun6 虚拟网络路径仍超时，公共 Cloudflare STUN 同样超时。服务已验证可用，未宣称默认 VPN 路径或真实异地游戏联机通过。
+- 新增 `stun/probe.py` 与 `stun/probe.html`，便于复现诊断。
+
+## 2026-10-05 13:38 WebRTC 控制台诊断发布
+
+- 构建版本 `26.1005.1337`，默认打印 `[GameLink RTC]` 分阶段日志：加入、信令发送/接受/接收、SDP、ICE、STUN、通道和重试统计。无令牌、完整 SDP 或游戏消息。
+- 构建与 JavaScript 语法检查通过；服务器坦克 SDK SHA-256 与本地相同，两项服务 active，健康接口正常。
+- 网页备份 `/home/b14f/games-previous-20261005-133845`。诊断日志增加不代表跨网络联机问题已解决。
+
+## 1.3 — 分级 WebRTC 连接
+
+- 服务端按 signal、stun、turn 拆分，由一个主入口监督启动；房间与私有恢复凭证保存至 MongoDB。
+- 网页 SDK 对每对成员依次尝试 LAN、STUN 公网直连和认证 TURN 中继。
+- 九个游戏及协作应用显示玩家与你之间的 P2P / TURN 连接方式，连接建立前显示连接或重连状态。
+- 原生部署需停止旧独立 STUN 服务，配置 MongoDB 与 TURN 密钥，并放行 3479 TCP/UDP、49160–49200 UDP。旧内存房间需重新创建。
+
+## 2026-10-05 18:13（Asia/Shanghai）统一游戏顶部面板发布
+
+- 构建版本 `26.1005.1809`，已发布至 https://games.b14f.com/。
+- 九个游戏统一顶部顺序：游戏标识、游戏名、房间号、邀请、退出、日志、玩家连接；移动端按钮使用紧凑图标布局。
+- 移动端限制页面缩放与长按选字，保留输入控件编辑；临时消息可关闭并在 6 秒后收起。
+- 回滚备份 `/home/b14f/games-previous-20261005-181302`。
+- 41 个公网资源 HTTP 200，SHA-256 与本地构建一致，覆盖首页与九个游戏的入口、脚本、样式及 SDK。线上诗词页面已确认显示新面板。
+- `gamelink-server` active，服务器本机健康接口返回 `status: ok` / `version: 1.3.0`。公开 `/v1/rooms` 路由正常；站点未公开 `/healthz`。
+- 本次发布未验证真实手机手势或异地多人联机。
+
+## 2026-10-05 18:21（Asia/Shanghai）玩家连接弹窗修复
+
+- 构建版本 `26.1005.1818`，已发布至 https://games.b14f.com/。
+- SDK 玩家连接列表改为浏览器顶层 modal dialog，避开各游戏画布层级、transform 和 overflow 容器裁切；保留锚点定位和屏幕边缘约束。
+- 增加关闭按钮、点外侧关闭与 Esc 关闭；关闭后恢复玩家连接按钮状态。
+- 在带裁切父容器及高层覆盖画布的浏览器测试页面验证，桌面与 375px 窄屏显示正常，关闭按钮和 Esc 可用。13 项 SDK 测试及完整构建通过。
+- 回滚备份 `/home/b14f/games-previous-20261005-182020`。线上 41 个资源 SHA-256 与本地构建一致，公开房间 API HTTP 200；服务 active，本机健康接口 status ok / 1.3.0。
+
+## 2026-10-05 18:33（Asia/Shanghai）SDK 日志与连接实时接口发布
+
+- 构建版本 `26.1005.1829`，已发布至 https://games.b14f.com/。
+- 新增 `client.getLogs(options)` 与 `client.getConnections(options)`：`type: 'dialog'` 或省略打开默认顶层弹窗；`type: 'data'` 仅提供实时数据，不访问 DOM。
+- 返回句柄支持 `data`、`onChange` 选项、`subscribe`、`dispose` 和 `close`；快照不可修改，生命周期结束自动清理。日志句柄存续期间采集已脱敏日志，保留最多 2000 条。
+- 九个游戏的日志及连接按钮、图标、人数由应用自身渲染，SDK 仅通过显式调用提供数据或默认弹窗。旧 `mountConnectionBanner` 标为 deprecated，保留兼容。
+- TypeScript 类型与 SDK README 已更新。16 项 SDK 测试、完整构建及浏览器自定义数据界面、默认连接弹窗和日志脱敏验证通过。
+- 回滚备份 `/home/b14f/games-previous-20261005-183204`；41 个线上资源 HTTP 200 且 SHA-256 匹配发布包，公开房间 API HTTP 200。服务 active，本机健康接口 status ok / 1.3.0。

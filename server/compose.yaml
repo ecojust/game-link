@@ -1,0 +1,39 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: gamelink
+      MONGO_INITDB_ROOT_PASSWORD: ${GAMELINK_MONGO_PASSWORD:?set GAMELINK_MONGO_PASSWORD}
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  gamelink:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      GAMELINK_MONGODB_URI: mongodb://gamelink:${GAMELINK_MONGO_PASSWORD}@mongodb:27017/gamelink?authSource=admin
+      GAMELINK_PUBLIC_HOST: ${GAMELINK_PUBLIC_HOST:?set GAMELINK_PUBLIC_HOST}
+      GAMELINK_TURN_SECRET: ${GAMELINK_TURN_SECRET:?set GAMELINK_TURN_SECRET}
+      GAMELINK_TURN_EXTERNAL_IP: ${GAMELINK_TURN_EXTERNAL_IP:-}
+      GAMELINK_TURN_RELAY_IP: 0.0.0.0
+      RUST_LOG: info
+    ports:
+      - "127.0.0.1:8089:8080"
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "3479:3479/tcp"
+      - "3479:3479/udp"
+      - "49160-49200:49160-49200/udp"
+    tmpfs:
+      - /run/gamelink:mode=0700
+    stop_grace_period: 15s
+volumes:
+  mongodb-data:

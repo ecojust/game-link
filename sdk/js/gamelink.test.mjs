@@ -39,11 +39,11 @@ test('negotiation timeout retries with signaling only, and dispose cancels retry
   game._ensurePeerConnection = () => { rebuilt++ }
   game._watchConnection('b')
   const timeout = game.retryTimers.get('b')
-  assert.equal(jobs.get(timeout).delay, 15000)
+  assert.equal(jobs.get(timeout).delay, 4000)
   await jobs.get(timeout).fn(); jobs.delete(timeout)
   assert.equal(game.peerStates.get('b'), 'reconnecting')
   const retry = game.retryTimers.get('b')
-  assert.ok(jobs.get(retry).delay >= 1000 && jobs.get(retry).delay < 1500)
+  assert.equal(jobs.get(retry).delay, 0)
   await jobs.get(retry).fn(); jobs.delete(retry)
   assert.deepEqual(signals, ['webrtc_restart'])
   assert.equal(rebuilt, 1)
@@ -51,11 +51,11 @@ test('negotiation timeout retries with signaling only, and dispose cancels retry
   assert.equal(jobs.size, 0)
 })
 
-test('TURN configuration is removed in direct-only mode', () => {
+test('TURN configuration is retained for the relay stage', () => {
   const game = new GameLinkClient({ gameId: 'test', playerName: 'host', iceServers: [
     { urls: ['turn:example.org', 'stun:example.org'] }, { urls: 'turns:example.org' },
   ] })
-  assert.deepEqual(game.iceServers.map(s => s.urls), [['stun:example.org']])
+  assert.deepEqual(game.iceServers.map(s => s.urls), [['turn:example.org', 'stun:example.org'], ['turns:example.org']])
 })
 
 test('late answers and ICE from an earlier generation cannot mutate the active connection', async () => {
@@ -157,4 +157,135 @@ test('P2P heartbeat times out a silent peer and internal ping messages stay priv
   assert.equal(delivered.length,0)
   assert.equal(outbound.at(-1).kind,'__gamelink_peer_pong')
   game.dispose()
+})
+
+test('LAN starts without ICE servers, STUN uses discovery, TURN enforces relay', t => {
+  const configurations = []
+  const previousRTC = globalThis.RTCPeerConnection
+  t.after(() => { if (previousRTC === undefined) delete globalThis.RTCPeerConnection; else globalThis.RTCPeerConnection = previousRTC })
+  globalThis.RTCPeerConnection = class {
+    constructor(configuration) { configurations.push(configuration) }
+    addEventListener() {}
+    createDataChannel() { return {} }
+    close() {}
+  }
+  const game = client()
+  game._createOffer = () => {}; game._attachChannel = () => {}; game._watchConnection = () => {}
+  game.iceServers = [{ urls: ['stun:discovery.example:3478'] }]
+  game.turnServers = [{ urls: ['turn:relay.example:3479?transport=tcp'], username:'temporary', credential:'private' }]
+  for (const stage of [0, 1, 2]) {
+    game.connections.clear(); game.networkStages.set('b', stage)
+    game._ensurePeerConnection({id:'b'})
+  }
+  assert.deepEqual(configurations[0], {iceServers:[], iceTransportPolicy:'all'})
+  assert.equal(configurations[1].iceServers[0].urls[0], 'stun:discovery.example:3478')
+  assert.equal(configurations[1].iceTransportPolicy, 'all')
+  assert.equal(configurations[2].iceServers[0].urls[0], 'turn:relay.example:3479?transport=tcp')
+  assert.equal(configurations[2].iceTransportPolicy, 'relay')
+  game.dispose()
+})
+
+test('TURN credentials are fetched only when advancing from STUN to relay', async t => {
+  const jobs = new Map(); let id = 0
+  t.mock.method(globalThis, 'setTimeout', (fn, delay) => {jobs.set(++id, {fn,delay});return id})
+  t.mock.method(globalThis, 'clearTimeout', id => jobs.delete(id))
+  const game = client(); let credentials=0
+  game._loadTurnServers = async () => { credentials++ }
+  game._sendSignal = async () => {}; game._ensurePeerConnection = () => {}
+  game._watchConnection = () => {}
+  game._retryPeer('b'); let job=game.retryTimers.get('b');await jobs.get(job).fn();jobs.delete(job)
+  assert.equal(game.networkStages.get('b'),1);assert.equal(credentials,0)
+  game._retryPeer('b');job=game.retryTimers.get('b');await jobs.get(job).fn();jobs.delete(job)
+  assert.equal(game.networkStages.get('b'),2);assert.equal(credentials,1)
+  game.dispose()
+})
+
+test('connections data mode provides immutable current state and real-time lifecycle without a DOM', () => {
+  const game = client(), updates = []
+  game.members = [{id:'a',name:'我'},{id:'b',name:'朋友'}]
+  const view = game.getConnections({type:'data',onChange:data=>updates.push(data)})
+  assert.equal(view.type,'data')
+  assert.equal(updates.length,1)
+  assert.equal(view.data.roomCode,'TEST')
+  assert.equal(view.data.players[0].state,'local')
+  assert.equal(view.data.players[1].state,'connecting')
+  assert.throws(()=>{view.data.players[1].name='changed'},TypeError)
+  assert.equal(game.members[1].name,'朋友')
+  game.peerStates.set('b','connected'); game.peerTransports.set('b','turn'); game.networkStages.set('b',2)
+  game.localIceAddresses.set('b','relay address'); game.retryAttempts.set('b',2); game.generations.set('b',12)
+  game._emitPeerState('b','connected')
+  assert.equal(view.data.players[1].transport,'turn')
+  assert.equal(view.data.players[1].networkStage,'turn')
+  assert.equal(view.data.players[1].localIce,'relay address')
+  assert.equal(view.data.players[1].attempt,2)
+  assert.equal(view.data.players[1].generation,12)
+  assert.equal(updates[0].players[1].transport,null)
+  game.peerStates.set('b','reconnecting'); game._emitPeerState('b','reconnecting')
+  assert.equal(view.data.players[1].transport,null)
+  let subscriberCalls=0
+  const unsubscribe=view.subscribe(()=>subscriberCalls++)
+  assert.equal(subscriberCalls,1)
+  unsubscribe()
+  game.members=[game.members[0]]; game._emit('members',game.members)
+  assert.equal(view.data.memberCount,1)
+  assert.equal(subscriberCalls,1)
+  game.dispose()
+  assert.equal(view.data.disposed,true)
+  assert.equal(view.data.memberCount,0)
+  assert.deepEqual(view.data.players,[])
+  assert.equal(game.listeners.size,0)
+  const finalCount=updates.length
+  view.dispose();view.close();game._emit('members',[])
+  assert.equal(updates.length,finalCount)
+})
+
+test('logs data mode activates real-time collection without debug and releases only its own consumers', t => {
+  t.mock.method(console,'info',()=>{})
+  const game=client(), updates=[]
+  const first=game.getLogs({type:'data',onChange:data=>updates.push(data)})
+  const second=game.getLogs({type:'data'})
+  assert.equal(game.debug,false)
+  assert.equal(game.logConsumers,2)
+  assert.deepEqual(first.data,[])
+  game._trace('http.test',null,{auth_token:'secret',payload:{resume_token:'private'},safe:'visible'})
+  assert.equal(first.data.length,1)
+  assert.equal(second.data.length,1)
+  assert.equal(first.data[0].safe,'visible')
+  assert.equal(JSON.stringify(first.data).includes('secret'),false)
+  assert.equal(JSON.stringify(first.data).includes('private'),false)
+  assert.throws(()=>{first.data[0].stage='changed'},TypeError)
+  assert.equal(updates[0].length,0)
+  first.dispose();first.close()
+  assert.equal(game.logConsumers,1)
+  game._trace('peer.test','b')
+  assert.equal(first.data.length,1)
+  assert.equal(second.data.length,2)
+  for(let i=0;i<2001;i++)game._trace('limit.test','b')
+  assert.equal(second.data.length,2000)
+  second.dispose()
+  assert.equal(game.logConsumers,0)
+  const last=game.debugLogs.length
+  game._trace('not.collected','b')
+  assert.equal(game.debugLogs.length,last)
+  assert.equal(game.listeners.size,0)
+})
+
+test('invalid diagnostic modes and failed default dialogs do not leak subscribers or log collection', () => {
+  const game=client()
+  assert.throws(()=>game.getConnections({type:'other'}),TypeError)
+  assert.throws(()=>game.getLogs({type:'other'}),TypeError)
+  assert.throws(()=>game.getConnections({type:'data',maxMembers:0}),TypeError)
+  assert.throws(()=>game.getLogs({type:'data',onChange:'bad'}),TypeError)
+  // The Node test process has no DOM: omitted type must try a dialog.
+  const active=game.getLogs({type:'data'})
+  assert.throws(()=>game.getLogs(),/Dialog mode requires/)
+  assert.equal(game.logConsumers,1)
+  assert.throws(()=>game.getConnections({type:'dialog'}),/Dialog mode requires/)
+  active.dispose()
+  assert.equal(game.logConsumers,0)
+  assert.equal(game.listeners.size,0)
+  game.dispose()
+  const closed=game.getConnections({type:'data'})
+  assert.equal(closed.data.disposed,true)
+  assert.equal(game.listeners.size,0)
 })
