@@ -1,0 +1,18 @@
+[
+  {
+    "id": "guangdong",
+    "name": "广东卫视",
+    "region": "广东",
+    "url": "https://h5cul1yar48um3t.wcetv.com/hls/gdsatellite.m3u8",
+    "reference": "https://iptv-org.github.io/iptv/countries/cn.m3u",
+    "checkedAt": "2026-10-04"
+  },
+  {
+    "id": "hebei",
+    "name": "河北卫视",
+    "region": "河北",
+    "url": "https://event.pull.hebtv.com/live/live101.m3u8",
+    "reference": "https://iptv-org.github.io/iptv/countries/cn.m3u",
+    "checkedAt": "2026-10-04"
+  }
+]

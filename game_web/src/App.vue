@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { GameLinkClient } from '../../sdk/js/gamelink.js'
-type Game = { id: string; title: string; description: string; players: string; tag: string; theme: string; glyph: string; entry_url: string }
+type Game = { id: string; title: string; description: string; max_players: number; tag: string; theme: string; glyph: string; entry_url: string; cover_url?: string }
 type Room = { code: string; game_id: string; member_count: number; max_members: number }
 const games = ref<Game[]>([]), rooms = ref<Room[]>([])
 const username = ref(localStorage.getItem('gamelink-game-name') || '')
 const busy = ref(false), error = ref(''), loading = ref(true)
 const serverUrl = import.meta.env.VITE_API_BASE_URL || ''
+const buildVersion = import.meta.env.VITE_BUILD_VERSION
 const integrationDialog = ref<HTMLDialogElement | null>(null)
 const nameDialog = ref<HTMLDialogElement | null>(null)
 const nameDraft = ref('')
@@ -14,6 +15,8 @@ const pendingRoom = ref<Room | null>(null)
 const pendingGame = ref<Game | null>(null)
 let timer = 0
 function gameFor(id: string) { return games.value.find(game => game.id === id) }
+function roomLimit(room: Room) { return Math.min(room.max_members, gameFor(room.game_id)?.max_players || room.max_members) }
+function isRoomFull(room: Room) { return room.member_count >= roomLimit(room) }
 function persist() { localStorage.setItem('gamelink-game-name', username.value.trim()) }
 function validName() {
   if (!username.value.trim()) { error.value = '先填写你的游戏昵称。'; return false }
@@ -43,11 +46,14 @@ async function launchRoom(game: Game) {
   try {
     const client = new GameLinkClient({ serverUrl, gameId: game.id, playerName: username.value.trim() })
     const url = await client.createLaunchUrl(game.entry_url)
-    window.location.assign(url)
+    const launchUrl = new URL(url, window.location.href)
+    if (game.id === 'gamelink-whiteboard') launchUrl.searchParams.set('newboard', '1')
+    window.location.assign(launchUrl.href)
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); busy.value = false }
 }
 function joinRoom(room: Room) {
   if (busy.value) return
+  if (isRoomFull(room)) { error.value = '这个房间已经满员。'; return }
   if (!username.value.trim()) {
     pendingRoom.value = room
     nameDraft.value = ''
@@ -65,6 +71,18 @@ function navigateToRoom(room: Room) {
   url.search = new URLSearchParams({ gameid: game.id, room: room.code, username: username.value.trim() }).toString()
   url.hash = ''
   window.location.assign(url.href)
+}
+function handleInviteRoute() {
+  const match = window.location.hash.match(/^#\/invite(?:\?(.*))?$/)
+  if (!match) return
+  const params = new URLSearchParams(match[1] || '')
+  const gameId = params.get('gameid')?.trim() || ''
+  const code = params.get('room')?.trim().toUpperCase() || ''
+  if (!gameId || !code) { error.value = '邀请链接缺少游戏或房间信息。'; return }
+  if (!gameFor(gameId)) { error.value = '邀请链接对应的游戏不存在。'; return }
+  const room = rooms.value.find(candidate => candidate.game_id === gameId && candidate.code.toUpperCase() === code)
+  if (!room) { error.value = '邀请链接无效，或这个房间已经关闭。'; return }
+  joinRoom(room)
 }
 function submitName() {
   const name = nameDraft.value.trim()
@@ -85,6 +103,7 @@ onMounted(async () => {
     if (!response.ok) throw new Error('游戏目录读取失败')
     games.value = await response.json()
     await refreshRooms()
+    handleInviteRoute()
     timer = window.setInterval(refreshRooms, 5000)
   } catch (reason) { error.value = String(reason); loading.value = false }
 })
@@ -92,7 +111,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
 </script>
 <template>
   <main class="game-shell">
-    <header class="masthead"><a class="brand" href="/"><img class="brand-logo" src="/gamelink-logo.svg" alt="GameLink" width="156" height="52" /></a><div class="masthead-actions"><button class="info-button" type="button" aria-label="个人游戏接入说明" title="个人游戏如何接入" @click="integrationDialog?.showModal()"><span aria-hidden="true">i</span></button><div class="version-label">GAME NETWORK <b>0.1</b></div></div></header>
+    <header class="masthead"><a class="brand" href="/"><img class="brand-logo" src="/gamelink-logo.svg" alt="GameLink" width="156" height="52" /></a><div class="masthead-actions"><button class="info-button" type="button" aria-label="个人游戏接入说明" title="个人游戏如何接入" @click="integrationDialog?.showModal()"><span aria-hidden="true">i</span></button><div class="version-label">GAME NETWORK <b>{{ buildVersion }}</b></div></div></header>
     <dialog ref="integrationDialog" class="integration-dialog" aria-labelledby="integration-title">
       <div class="integration-heading"><div><span class="integration-kicker">GAMELINK / DEVELOPER GUIDE</span><h2 id="integration-title">接入你自己的游戏</h2></div><button class="dialog-close" type="button" aria-label="关闭" @click="integrationDialog?.close()">×</button></div>
       <p class="integration-lead">准备一个能通过浏览器打开的游戏页面。GameLink 负责房间、玩家列表与 P2P 通讯，你的游戏负责玩法和游戏状态。</p>
@@ -133,30 +152,31 @@ client.send('shot', shot, { reliability: 'reliable' })</code></pre>
       </form>
     </dialog>
     <section class="home-hub">
-      <div class="hub-intro"><div><div class="kicker"><span></span> GAMELINK / 多人游戏车库</div><h1>现在开局。<em>马上见。</em></h1><p>选一款游戏创建房间，和朋友一起进入游戏。</p></div><label class="driver-name"><small>你的名字</small><input v-model="username" maxlength="32" placeholder="输入游戏昵称" @change="persist" /></label></div>
+      <div class="hub-intro"><div><div class="kicker"><span></span> GAMELINK / 多人协作与游戏</div><h1>一起协作。<em>一起开局。</em></h1><p>和朋友一起玩游戏、共创画布，在同一个房间里实时协作。</p></div><label class="driver-name"><small>你的名字</small><input v-model="username" maxlength="32" placeholder="输入你的昵称" @change="persist" /></label></div>
       <section class="room-board">
         <div class="hub-section-heading"><div><small>LIVE PIT BOARD</small><h2>正在开的房间</h2></div><span class="room-count">{{ rooms.length }} 个房间</span></div>
         <div v-if="loading" class="room-empty">正在读取房间列表…</div>
         <div v-else-if="!rooms.length" class="room-empty">从下面选一款游戏，创建第一间房。</div>
         <div v-else class="live-room-strip">
-          <button v-for="room in rooms" :key="room.code" class="live-room-card" :disabled="busy || room.member_count >= room.max_members || !gameFor(room.game_id)" @click="joinRoom(room)">
-            <span class="room-card-top"><b>{{ gameFor(room.game_id)?.title || room.game_id }}</b><i>{{ room.member_count >= room.max_members ? '已满' : '进行中' }}</i></span>
-            <strong class="live-room-code">{{ room.code }}</strong><span class="room-card-bottom"><code>{{ room.game_id }}</code><span>{{ room.member_count }} / {{ room.max_members }} 人 →</span></span>
-          </button>
+          <article v-for="room in rooms" :key="room.code" class="live-room-card">
+            <button class="live-room-join" :disabled="busy || isRoomFull(room) || !gameFor(room.game_id)" @click="joinRoom(room)">
+              <span class="room-card-top"><b>{{ gameFor(room.game_id)?.title || room.game_id }}</b><i>{{ isRoomFull(room) ? '已满' : '进行中' }}</i></span>
+              <strong class="live-room-code">{{ room.code }}</strong><span class="room-card-bottom"><code>{{ room.game_id }}</code><span>{{ room.member_count }} / {{ roomLimit(room) }} 人</span></span>
+            </button>
+          </article>
         </div>
       </section>
       <section class="game-library">
-        <div class="hub-section-heading"><div><small>SELECT A GAME</small><h2>选择一款游戏</h2></div><span class="room-count">{{ games.length }} 款可玩</span></div>
+        <div class="hub-section-heading"><div><small>PLAY & CREATE TOGETHER</small><h2>选择多人空间</h2></div><span class="room-count">{{ games.length }} 个空间</span></div>
         <div class="game-card-grid">
           <article v-for="game in games" :key="game.id" class="game-card" :class="`game-${game.theme}`">
-            <div class="game-poster" :class="`poster-${game.theme}`" aria-hidden="true">
-              <template v-if="game.theme === 'racer'"><div class="poster-track"><i></i><b></b></div><span class="poster-car car-one">4WD</span><span class="poster-car car-two">4WD</span><small>RAM! CRASH! 4WD BATTLE</small><strong>激斗<br />四驱车</strong></template>
-              <template v-else-if="game.theme === 'doodle'"><div class="doodle-art"><i>✳</i><b>HELLO!</b><em>◉</em><strong>画点<br/>什么</strong></div><span class="poster-lock">{{ game.tag }}</span></template>
-              <template v-else-if="game.theme === 'flight'"><div class="flight-art"><span>✈</span><span>✈</span><span>✈</span><span>✈</span><b>出发点<br/>就在起点。</b></div><span class="poster-lock">四人同场 · 掷骰起飞</span></template>
-              <template v-else><div class="poster-grid"></div><div class="poster-tank"><i></i><b></b></div><span class="poster-lock">{{ game.tag }}</span><strong>{{ game.title }}</strong></template>
-              <span class="poster-index">{{ game.glyph }}</span>
+            <div class="game-poster" :class="`poster-${game.theme}`">
+              <img class="game-cover-image" :src="game.cover_url || `/covers/${game.theme}.jpg`" alt="" loading="lazy" />
+              <span class="poster-lock">{{ game.tag }}</span>
+              <h3 class="poster-title">{{ game.title }}</h3>
+              <span class="poster-index" aria-hidden="true">{{ game.glyph }}</span>
             </div>
-            <div class="game-card-copy"><div class="game-card-meta"><span>{{ game.tag }}</span><code>{{ game.id }}</code></div><h3>{{ game.title }}</h3><p>{{ game.description }}</p><div class="game-card-footer"><span>{{ game.players }}</span><button :disabled="busy" @click="createRoom(game)">{{ busy ? '正在进入…' : '创建房间' }} ↗</button></div></div>
+            <div class="game-card-copy"><p>{{ game.description }}</p><div class="game-card-footer"><span>人数上限：{{ game.max_players }}</span><button :disabled="busy" @click="createRoom(game)">{{ busy ? '正在进入…' : '创建房间' }} ↗</button></div></div>
           </article>
         </div>
       </section>

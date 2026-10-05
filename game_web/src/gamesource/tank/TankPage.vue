@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import UiIcon from "../shared/UiIcon.vue"
 import '../shared/battle.css'
 import { BattleAudio } from '../shared/audio'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { GameLinkClient } from '../../../../sdk/js/gamelink.js'
 import type { GameLinkMessage, GameLinkRoom } from '../../../../sdk/js/gamelink.js'
+import RoomInviteButton from '../shared/RoomInviteButton.vue'
 
 type Member = { id: string; name: string; virtual_ip: string; endpoint: string }
 type Room = GameLinkRoom
@@ -75,7 +77,9 @@ let lastStateSentAt = 0
 let animationFrame = 0
 let lastFrame = 0
 const keys = new Set<string>()
-const touchPointers = new Map<number, string>()
+const tankStick = ref<HTMLElement | null>(null)
+const stickVector = ref({ x: 0, y: 0 })
+let stickPointerId: number | null = null
 const membersSorted = computed(() => [...members.value].sort((a, b) => a.id.localeCompare(b.id)))
 const readyCount = computed(() => members.value.filter((member) => member.id === self.value?.id ? selfReady.value : Boolean(readyMap[member.id])).length)
 const connectedPeerCount = computed(() => members.value.filter((member) => member.id !== self.value?.id && peerStates[member.id] === 'connected').length)
@@ -381,12 +385,13 @@ function tick(dt: number) {
     const previousX = localTank.x
     const previousY = localTank.y
     const previousAngle = localTank.angle
-    const horizontal = Number(keys.has('d') || keys.has('arrowright')) - Number(keys.has('a') || keys.has('arrowleft'))
-    const vertical = Number(keys.has('s') || keys.has('arrowdown')) - Number(keys.has('w') || keys.has('arrowup'))
-    if (horizontal || vertical) {
-      const length = Math.hypot(horizontal, vertical)
-      const dx = (horizontal / length) * 175 * dt
-      const dy = (vertical / length) * 175 * dt
+    const horizontal = stickPointerId !== null ? stickVector.value.x : Number(keys.has('d') || keys.has('arrowright')) - Number(keys.has('a') || keys.has('arrowleft'))
+    const vertical = stickPointerId !== null ? stickVector.value.y : Number(keys.has('s') || keys.has('arrowdown')) - Number(keys.has('w') || keys.has('arrowup'))
+    const inputLength = Math.hypot(horizontal, vertical)
+    const magnitude = stickPointerId !== null ? Math.min(1, inputLength) : Number(inputLength > 0)
+    if (magnitude > 0.12) {
+      const dx = (horizontal / inputLength) * 175 * magnitude * dt
+      const dy = (vertical / inputLength) * 175 * magnitude * dt
       localTank.angle = Math.atan2(dy, dx)
       moveTank(dx, dy)
     }
@@ -527,20 +532,32 @@ function startFire(event: PointerEvent) {
   fireHeld.value = true
 }
 function stopFire() { fireHeld.value = false }
-function startTouchMove(key: string, event: PointerEvent) {
+function updateTankStick(event: PointerEvent) {
+  const element = tankStick.value
+  if (!element) return
+  const bounds = element.getBoundingClientRect()
+  const radius = Math.min(bounds.width, bounds.height) * 0.34
+  let x = (event.clientX - bounds.left - bounds.width / 2) / radius
+  let y = (event.clientY - bounds.top - bounds.height / 2) / radius
+  const distance = Math.hypot(x, y)
+  if (distance > 1) { x /= distance; y /= distance }
+  stickVector.value = { x, y }
+}
+function startTankStick(event: PointerEvent) {
   unlockTankAudio()
-  const button = event.currentTarget as HTMLElement
-  button.setPointerCapture(event.pointerId)
-  touchPointers.set(event.pointerId, key)
-  keys.add(key)
+  tankStick.value?.setPointerCapture(event.pointerId)
+  stickPointerId = event.pointerId
+  updateTankStick(event)
 }
-function stopTouchMove(event: PointerEvent) {
-  const key = touchPointers.get(event.pointerId)
-  if (!key) return
-  touchPointers.delete(event.pointerId)
-  if (![...touchPointers.values()].includes(key)) keys.delete(key)
+function moveTankStick(event: PointerEvent) {
+  if (event.pointerId === stickPointerId) updateTankStick(event)
 }
-function onWindowBlur() { touchPointers.clear(); keys.clear(); fireHeld.value = false }
+function stopTankStick(event: PointerEvent) {
+  if (event.pointerId !== stickPointerId) return
+  stickPointerId = null
+  stickVector.value = { x: 0, y: 0 }
+}
+function onWindowBlur() { stickPointerId = null; stickVector.value = { x: 0, y: 0 }; keys.clear(); fireHeld.value = false }
 
 async function copyRoomCode() {
   if (!room.value) return
@@ -601,17 +618,17 @@ onBeforeUnmount(() => {
   <main class="game-shell tank-playing">
     <div v-if="phase === 'start'" class="launch-status"><p>{{ error || '正在加入坦克房间…' }}</p><a :href="platformHome">返回平台大厅</a></div>
     <section v-else class="room-screen">
-      <div class="room-toolbar"><div><div class="kicker"><span></span> {{ activeGame.subtitle || room?.game_id }}</div><h1>{{ activeGame.title || room?.game_id }}<i>.</i></h1><p>{{ room?.game_id === 'fc-mini-4wd' ? '用车头击破敌车，保护侧面与车尾。' : phase === 'lobby' ? '分享房间号，所有人准备就绪后即可开始。' : phase === 'battle' ? '击中对手，留在战场上。' : gameMessage }}</p></div><button class="room-code" @click="copyRoomCode"><small>作战房间 · 点击复制</small><strong>{{ room?.code }}</strong><span>▢</span></button><button class="exit-button" @click="leaveRoomFromButton">离开房间 ↗</button></div>
+      <div class="room-toolbar"><div><div class="kicker"><span></span> {{ activeGame.subtitle || room?.game_id }}</div><h1>{{ activeGame.title || room?.game_id }}<i>.</i></h1><p>{{ room?.game_id === 'fc-mini-4wd' ? '用车头击破敌车，保护侧面与车尾。' : phase === 'lobby' ? '分享房间号，所有人准备就绪后即可开始。' : phase === 'battle' ? '击中对手，留在战场上。' : gameMessage }}</p></div><button class="room-code" @click="copyRoomCode"><small>作战房间 · 点击复制</small><strong>{{ room?.code }}</strong><UiIcon name="copy" /></button><button class="gl-action exit-button" @click="leaveRoomFromButton"><UiIcon name="exit" /><UiIcon name="exit" />离开房间</button></div>
 
       <div v-if="phase === 'lobby'" class="lobby-grid">
-        <section class="roster-card"><div class="panel-heading"><div><small>DEPLOYMENT ROSTER</small><h2>作战成员 <span>{{ members.length }} / 16</span></h2></div><span class="sync-label" :class="networkModeClass"><i></i>{{ networkMode }} · P2P {{ connectedPeerCount }} / {{ peerTotalCount }}</span></div><div class="roster-list"><div v-for="(member, index) in membersSorted" :key="member.id" class="roster-row" :class="{ mine: member.id === self?.id }"><span class="player-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="player-badge" :style="{ '--paint': PALETTE[index % PALETTE.length] }">{{ member.name.slice(0, 1).toUpperCase() }}</span><div class="player-copy"><strong>{{ member.name }}<small v-if="member.id === self?.id">你</small></strong><span>{{ member.id === self?.id ? '玩家 · 本机控制' : '玩家 · P2P 对等连接' }}</span></div><code class="peer-state" :class="{ linked: peerStates[member.id] === 'connected' }">{{ peerStatusLabel(member.id) }}</code><span class="ready-pill" :class="{ ready: member.id === self?.id ? selfReady : readyMap[member.id] }"><i></i>{{ member.id === self?.id ? selfReady ? '已准备' : '待命中' : readyMap[member.id] ? '已准备' : '等待准备' }}</span></div><div v-if="members.length < 2" class="recruit-note"><span>⌁</span><div><strong>还需要一位对手</strong><p>把房间号发给朋友。至少两位玩家才能开始。</p></div></div></div><div class="roster-actions"><button class="ready-button" :class="{ active: selfReady }" :disabled="!allPeerPathsReady" @click="toggleReady">{{ selfReady ? '取消准备' : '我已准备' }} <span>{{ selfReady ? '✓' : '＋' }}</span></button><button class="start-button" :disabled="!canStart" @click="startBattle">开始对战 <span>→</span></button><div v-if="!canStart" class="room-hint"><span v-if="!allPeerPathsReady">正在建立 P2P 连接…</span><span v-else>等待所有玩家准备 · {{ readyCount }}/{{ members.length }}</span></div></div></section>
+        <section class="roster-card"><div class="panel-heading"><div><small>DEPLOYMENT ROSTER</small><h2>作战成员 <span>{{ members.length }} / 16</span></h2></div><span class="sync-label" :class="networkModeClass"><i></i>{{ networkMode }} · P2P {{ connectedPeerCount }} / {{ peerTotalCount }}</span></div><div class="roster-list"><div v-for="(member, index) in membersSorted" :key="member.id" class="roster-row" :class="{ mine: member.id === self?.id }"><span class="player-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="player-badge" :style="{ '--paint': PALETTE[index % PALETTE.length] }">{{ member.name.slice(0, 1).toUpperCase() }}</span><div class="player-copy"><strong>{{ member.name }}<small v-if="member.id === self?.id">你</small></strong><span>{{ member.id === self?.id ? '玩家 · 本机控制' : '玩家 · P2P 对等连接' }}</span></div><code class="peer-state" :class="{ linked: peerStates[member.id] === 'connected' }">{{ peerStatusLabel(member.id) }}</code><span class="ready-pill" :class="{ ready: member.id === self?.id ? selfReady : readyMap[member.id] }"><i></i>{{ member.id === self?.id ? selfReady ? '已准备' : '待命中' : readyMap[member.id] ? '已准备' : '等待准备' }}</span></div><div v-if="members.length < 2" class="recruit-note"><span>⌁</span><div><strong>还需要一位对手</strong><p>把房间号发给朋友。至少两位玩家才能开始。</p></div></div></div><div class="roster-actions"><button class="gl-action ready-button" :class="{ active: selfReady }" :disabled="!allPeerPathsReady" @click="toggleReady">{{ selfReady ? '取消准备' : '我已准备' }} <UiIcon :name="selfReady ? 'check' : 'plus'" /></button><button class="gl-action start-button" :disabled="!canStart" @click="startBattle">开始对战 <UiIcon name="play" /></button><div v-if="!canStart" class="room-hint"><span v-if="!allPeerPathsReady">正在建立 P2P 连接…</span><span v-else>等待所有玩家准备 · {{ readyCount }}/{{ members.length }}</span></div></div></section>
         <aside class="lobby-side"><div class="map-preview"><div class="map-label"><small>ARENA MAP</small><strong>铁锈峡谷</strong></div><div class="mini-arena"><i v-for="(member, index) in membersSorted" :key="member.id" class="mini-tank" :style="{ left: `${12 + (index * 19) % 76}%`, top: `${18 + (index * 31) % 64}%`, '--paint': PALETTE[index % PALETTE.length] }"></i><b class="block block-a"></b><b class="block block-b"></b><b class="block block-c"></b></div><div class="map-meta"><span>场地 01</span><span>障碍物 · 5</span><span>队伍 · {{ members.length }}</span></div></div><div class="control-card"><small>FIELD MANUAL</small><h3>准备好就按下开战</h3><div><kbd>W A S D</kbd><span>移动坦克</span></div><div><kbd>↑ ↓ ← →</kbd><span>同样可移动</span></div><div><kbd>SPACE</kbd><span>发射炮弹</span></div></div><p class="network-footnote">游戏数据仅通过 WebRTC 直连，连接失败后自动重试。</p></aside>
       </div>
 
 
       <section v-else class="fc-game tank-game" aria-label="坦克全屏战场">
         <header class="fc-banner">
-          <button class="fc-room-tag" :title="`房间号 ${room?.code}`" @click="tankMenu = !tankMenu" :aria-expanded="tankMenu" aria-controls="tank-room-menu">{{ room?.code }} <span>☰</span></button>
+          <button class="gl-action fc-room-tag" :title="`房间号 ${room?.code}`" @click="tankMenu = !tankMenu" :aria-expanded="tankMenu" aria-controls="tank-room-menu">{{ room?.code }} <UiIcon name="menu" /></button>
           <span>装甲 <b :class="{ 'fc-low-life': localTank.hp < 30 }">{{ localTank.hp }}</b></span>
           <span>击破 <b>{{ localTank.kills }}</b></span><span>{{ members.length }} 人</span>
           <span class="fc-banner-network" :title="networkMode">{{ networkMode }}</span>
@@ -620,18 +637,18 @@ onBeforeUnmount(() => {
           <div class="fc-viewport">
             <div v-if="recoveryNotice" class="network-recovery" role="status">{{ recoveryNotice }}</div>
             <canvas ref="canvas" class="fc-canvas" aria-label="多人坦克战场"></canvas>
-            <div v-if="phase === 'result'" class="fc-cover"><small>ARENA COMPLETE</small><strong>{{ gameMessage }}</strong><button @click="leaveRoomFromButton">返回大厅</button></div>
+            <div v-if="phase === 'result'" class="fc-cover"><small>ARENA COMPLETE</small><strong>{{ gameMessage }}</strong><button class="gl-action" @click="leaveRoomFromButton">返回大厅</button></div>
             <div v-else-if="!localTank.alive" class="fc-respawn">坦克已被击毁 · 观战中</div>
           </div>
           <div class="fc-controller" aria-label="触屏操作" @contextmenu.prevent>
-            <div class="fc-dpad" aria-label="方向控制"><button class="fc-up" aria-label="向上移动" @pointerdown.prevent="startTouchMove('w', $event)" @pointerup="stopTouchMove" @pointercancel="stopTouchMove" @lostpointercapture="stopTouchMove">▲</button><button class="fc-left" aria-label="向左移动" @pointerdown.prevent="startTouchMove('a', $event)" @pointerup="stopTouchMove" @pointercancel="stopTouchMove" @lostpointercapture="stopTouchMove">◀</button><button class="fc-right" aria-label="向右移动" @pointerdown.prevent="startTouchMove('d', $event)" @pointerup="stopTouchMove" @pointercancel="stopTouchMove" @lostpointercapture="stopTouchMove">▶</button><button class="fc-down" aria-label="向下移动" @pointerdown.prevent="startTouchMove('s', $event)" @pointerup="stopTouchMove" @pointercancel="stopTouchMove" @lostpointercapture="stopTouchMove">▼</button><span>✚</span></div>
+            <div ref="tankStick" class="fc-stick" role="application" aria-label="坦克移动摇杆" @pointerdown.prevent="startTankStick" @pointermove.prevent="moveTankStick" @pointerup="stopTankStick" @pointercancel="stopTankStick" @lostpointercapture="stopTankStick"><div class="fc-stick-pad"><span class="fc-stick-crosshair"/><span class="fc-stick-thumb" :style="{ transform: `translate(${stickVector.x * 30}px, ${stickVector.y * 30}px)` }"/></div><small>移动</small></div>
             <div class="fc-ab"><div><button aria-label="A 按住发射炮弹" @pointerdown.prevent="startFire" @pointerup="stopFire" @pointercancel="stopFire" @lostpointercapture="stopFire">A</button></div></div>
           </div>
         </div>
         <aside v-if="tankMenu" id="tank-room-menu" class="fc-menu" aria-label="房间设置">
-          <div class="fc-menu-heading"><strong>多人坦克竞技场 · 铁锈峡谷</strong><button @click="tankMenu = false" aria-label="关闭菜单">×</button></div>
-          <div class="fc-menu-actions"><button @click="copyRoomCode">复制房间号</button><button @click="leaveRoomFromButton">离开房间</button></div>
-          <div class="fc-menu-actions"><button @click="toggleTankMusic" :aria-pressed="tankMusic">{{ tankMusic ? '关闭背景音乐' : '开启背景音乐' }}</button></div>
+          <div class="fc-menu-heading"><strong>多人坦克竞技场 · 铁锈峡谷</strong><button class="gl-action" @click="tankMenu = false" aria-label="关闭菜单"><UiIcon name="close" /></button></div>
+          <div class="fc-menu-actions"><button class="gl-action" @click="copyRoomCode"><UiIcon name="copy" />复制房间号</button><RoomInviteButton game-id="tank-arena" :room-code="room?.code" :member-count="members.length" :max-members="4"/><button class="gl-action" @click="leaveRoomFromButton"><UiIcon name="exit" />离开房间</button></div>
+          <div class="fc-menu-actions"><button class="gl-action" @click="toggleTankMusic" :aria-pressed="tankMusic"><UiIcon :name="tankMusic ? 'volume' : 'muted'" />{{ tankMusic ? '关闭背景音乐' : '开启背景音乐' }}</button></div>
           <label class="fc-volume">音量 {{ tankVolume }}%<input v-model.number="tankVolume" type="range" min="0" max="100" aria-label="背景音乐音量" @input="tankAudio?.setVolume(tankVolume / 100)" /></label>
           <p class="fc-ice">首次按方向键或开火键启动音乐，切到后台暂停。</p>
           <div class="fc-roster"><span v-for="tank in scores" :key="tank.id"><i :style="{ background: tank.color }"></i><b>{{ tank.name }}</b><small>{{ peerStatusLabel(tank.id) }}</small><em>{{ tank.hp }} HP · {{ tank.kills }} 击破</em></span></div>
@@ -641,7 +658,7 @@ onBeforeUnmount(() => {
         </aside>
       </section>
 
-      <div v-if="error || note" class="toast" :class="{ danger: error }" role="status">{{ error || note }}<button @click="error = ''; note = ''">×</button></div>
+      <div v-if="error || note" class="toast" :class="{ danger: error }" role="status">{{ error || note }}<button class="gl-action" @click="error = ''; note = ''"><UiIcon name="close" /></button></div>
     </section>
   </main>
 </template>

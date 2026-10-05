@@ -36,16 +36,36 @@ export interface GameLinkPeerState {
   remoteIce: string
 }
 
+export interface GameLinkStunStatus {
+  peerId: string
+  generation: number
+  status: 'server-error' | 'available' | 'failed' | 'unconfirmed'
+  urls: string[]
+  failures: { url: string; errorCode: number; errorText: string }[]
+  publicCandidate: boolean
+  code?: 'STUN_SERVER_ERROR' | 'STUN_ALL_FAILED' | 'STUN_NO_PUBLIC_CANDIDATE' | 'STUN_TIMEOUT'
+  message?: string
+  url?: string
+  errorCode?: number
+  errorText?: string
+}
+
+export interface GameLinkStunError extends Error, GameLinkStunStatus {
+  code: 'STUN_SERVER_ERROR' | 'STUN_ALL_FAILED' | 'STUN_NO_PUBLIC_CANDIDATE' | 'STUN_TIMEOUT'
+}
+
 export interface GameLinkClientOptions {
   serverUrl?: string
   gameId: string
   playerName: string
   iceServers?: RTCIceServer[]
   requestTimeoutMs?: number
+  /** Retry delay after polling errors; 1.2 uses long polling. */
   pollIntervalMs?: number
   heartbeatIntervalMs?: number
   peerHeartbeatIntervalMs?: number
   peerTimeoutMs?: number
+  /** Optional room refresh fallback; 0 by default. */
   roomRefreshIntervalMs?: number
 }
 
@@ -68,6 +88,7 @@ export class GameLinkClient {
   on(event: 'peer-ready', listener: (event: { peerId: string; generation: number; recovered: boolean }) => void): () => void
   on(event: 'peer-state', listener: (state: GameLinkPeerState) => void): () => void
   on(event: 'delivery-skipped', listener: (event: { peerId: string; kind: string; reason: 'p2p-not-ready' }) => void): () => void
+  on(event: 'stun-status', listener: (status: GameLinkStunStatus) => void): () => void
   on(event: 'error', listener: (error: Error) => void): () => void
   on(event: 'room-closed', listener: (event: { reason: string }) => void): () => void
   createRoom(): Promise<GameLinkJoinResponse>

@@ -8,8 +8,8 @@ Gameplay uses WebRTC peer-to-peer (P2P) DataChannels. Every player is an equal p
 
 | Game ID       | Game                                                    | Players |
 | ------------- | ------------------------------------------------------- | ------- |
-| `tank-arena`  | Multiplayer tank arena                                  | 2–16    |
-| `fc-mini-4wd` | Three.js FC-style car combat, **激斗四驱车** | 1–16    |
+| `tank-arena`  | Multiplayer tank arena                                  | 2–4    |
+| `fc-mini-4wd` | Three.js FC-style car combat, **激斗四驱车** | 1–4    |
 
 The browser hub lists active rooms with their game name, game ID, and player count, and lets players create or join a game-specific room. Any player can join a created room, and new players can join while a match is running.
 
@@ -66,8 +66,12 @@ The complete request and message contract is in [`sdk/PROTOCOL.md`](sdk/PROTOCOL
 | `POST` | `/v1/rooms/{code}/signals`      | Queue WebRTC offer, answer, or ICE signaling                |
 | `POST` | `/v1/rooms/{code}/signals/poll` | Refresh presence, discover members, and receive signaling   |
 
-The public room list omits player identities and network endpoints. The server supports up to 16 members per room. Each game must use a stable, unique `game_id`.
+The public room list omits player identities and network endpoints. The server supports up to 4 members per room. Each game must use a stable, unique `game_id`.
 
 ## SDKs
 
 The JavaScript SDK is used by `game_web`. Godot and Rust SDKs implement the shared room and peer-messaging contract; see their individual setup notes in [`sdk/README.md`](sdk/README.md). The SDK handles room membership, member discovery, heartbeats, ICE negotiation, and message transport. Games define their own message types and payloads.
+
+## Version 1.2
+
+Current source implements 4-player rooms, token-authenticated member operations, 15-second signaling long polls, ACK-based delivery with deduplication and 60-second expiry, bounded signaling queues, per-room locking and collision-safe room creation. Server and SDKs must upgrade together; old browser pages must refresh. See [release and migration notes](RELEASE.md). Deployed on 2026-10-03.

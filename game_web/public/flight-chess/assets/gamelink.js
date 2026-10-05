@@ -1,4 +1,9 @@
+// Additional providers from the 2025-07-15 list; reachability is checked by each browser.
 const DEFAULT_ICE_SERVERS = [
+  { urls: 'stun:stun.miwifi.com:3478' },
+  { urls: 'stun:stun.antisip.com:3478' },
+  { urls: 'stun:stun.linphone.org:3478' },
+  { urls: 'stun:stun.zadarma.com:3478' },
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
 ]
@@ -13,12 +18,12 @@ export class GameLinkClient {
     gameId,
     playerName,
     iceServers = DEFAULT_ICE_SERVERS,
-    pollIntervalMs = 120,
+    pollIntervalMs = 250,
     requestTimeoutMs = 8000,
     heartbeatIntervalMs = 8_000,
     peerHeartbeatIntervalMs = 4_000,
     peerTimeoutMs = 12_000,
-    roomRefreshIntervalMs = 1_500,
+    roomRefreshIntervalMs = 0,
   }) {
     if (!gameId) throw new Error('gameId is required')
     if (!playerName?.trim()) throw new Error('playerName is required')
@@ -46,9 +51,18 @@ export class GameLinkClient {
     this.listeners = new Map()
     this.timers = []
     this.polling = false
+    this.pollEpoch = 0
+    this.pollTimer = null
+    this.pollController = null
+    this.signalRevision = null
+    this.signalAcks = new Set()
+    this.seenSignals = new Map()
+    this.memberToken = null
     this.disposed = false
     this.resuming = false
     this.loggedConnections = new WeakSet()
+    this.stunErrorNotices = new Map()
+    this.stunDiagnosticTimers = new Map()
     this.retryTimers = new Map()
     this.retryAttempts = new Map()
     this.generations = new Map()
@@ -112,11 +126,16 @@ export class GameLinkClient {
     const roomCode = String(code || '').trim().toUpperCase()
     if (!roomCode) throw new Error('room code is required')
     const resumeToken = this._getResumeToken(roomCode)
-    const result = await this._request(`/v1/rooms/${encodeURIComponent(roomCode)}/join`, 'POST', {
+    let result
+    try { result = await this._request(`/v1/rooms/${encodeURIComponent(roomCode)}/join`, 'POST', {
       game_id: this.gameId,
       player_name: this.playerName,
       resume_token: resumeToken || undefined,
     })
+    } catch (error) {
+      if (!resumeToken || error.status !== 401) throw error
+      result = await this._request(`/v1/rooms/${encodeURIComponent(roomCode)}/join`, 'POST', {game_id:this.gameId, player_name:this.playerName})
+    }
     this._setResumeToken(roomCode, result.resume_token)
     await this._enterRoom(result, Boolean(resumeToken))
     return result
@@ -127,6 +146,10 @@ export class GameLinkClient {
     this.resuming = resumed
     this.room = result.room
     this.selfMember = result.self_member
+    this.memberToken = result.resume_token
+    this.signalRevision = null
+    this.signalAcks.clear()
+    this.seenSignals.clear()
     this._setResumeToken(result.room.code, result.resume_token)
     this._setMembers(result.room.members)
     this._emit('room', this.room)
@@ -155,17 +178,20 @@ export class GameLinkClient {
 
   _startLoops() {
     this._stopLoops()
-    this._pollSignals()
-    this.refreshRoom().catch((error) => this._reportError(error))
-    this.timers.push(setInterval(() => this._pollSignals(), this.pollIntervalMs))
+    void this._pollSignals()
     this.timers.push(setInterval(() => this._heartbeat(), this.heartbeatIntervalMs))
     this.timers.push(setInterval(() => this._checkPeerHeartbeats(), this.peerHeartbeatIntervalMs))
-    this.timers.push(setInterval(() => this.refreshRoom().catch(error => this._reportError(error)), this.roomRefreshIntervalMs))
+    // Optional explicit fallback; membership normally arrives through long polling.
+    if (this.roomRefreshIntervalMs > 0) this.timers.push(setInterval(() => this.refreshRoom().catch(error => this._reportError(error)), this.roomRefreshIntervalMs))
   }
 
   _stopLoops() {
     for (const timer of this.timers) clearInterval(timer)
     this.timers = []
+    this.pollEpoch++
+    clearTimeout(this.pollTimer)
+    this.pollController?.abort()
+    this.polling = false
   }
 
   async refreshRoom() {
@@ -196,17 +222,46 @@ export class GameLinkClient {
   async _pollSignals() {
     if (this.polling || !this.room || !this.selfMember || this.disposed) return
     this.polling = true
+    const epoch = this.pollEpoch
+    const controller = new AbortController()
+    this.pollController = controller
+    const acknowledgements = [...this.signalAcks]
+    let delay = 0
     try {
       const result = await this._request(`/v1/rooms/${encodeURIComponent(this.room.code)}/signals/poll`, 'POST', {
-        member_id: this.selfMember.id,
-      })
-      if (this.disposed) return
+        member_id: this.selfMember.id, ack_ids: acknowledgements,
+        revision: this.signalRevision, wait_ms: 15000,
+      }, { timeoutMs: Math.max(this.requestTimeoutMs, 20000), signal: controller.signal })
+      if (this.disposed || epoch !== this.pollEpoch) return
+      for (const id of acknowledgements) this.signalAcks.delete(id)
+      this.signalRevision = result.revision
       this._setMembers([...result.members, this.selfMember])
-      for (const signal of result.signals) await this._receiveSignal(signal)
+      this._emit('room', this.room)
+      const now = Date.now()
+      for (const [id, at] of this.seenSignals) if (now-at > 120000) this.seenSignals.delete(id)
+      for (const signal of result.signals) {
+        if (!signal.id) throw new Error('GameLink 1.2 SDK requires a 1.2 signaling server')
+        if (!this.seenSignals.has(signal.id)) {
+          await this._receiveSignal(signal)
+          this.seenSignals.set(signal.id, now)
+        }
+        this.signalAcks.add(signal.id)
+      }
     } catch (error) {
-      this._reportError(error)
+      if (!this.disposed && epoch === this.pollEpoch && !controller.signal.aborted) {
+        this._reportError(error)
+        if ([401,404,410].includes(error.status)) {
+          this._emit('room-closed', { reason: error.message })
+          this.dispose()
+        }
+      }
+      delay = Math.max(this.pollIntervalMs, 1000)
     } finally {
-      this.polling = false
+      if (epoch === this.pollEpoch) {
+        this.polling = false
+        this.pollController = null
+        if (!this.disposed) this.pollTimer = setTimeout(() => void this._pollSignals(), delay)
+      }
     }
   }
 
@@ -268,6 +323,9 @@ export class GameLinkClient {
     this._stopLoops()
     for (const timer of this.retryTimers.values()) clearTimeout(timer)
     this.retryTimers.clear()
+    for (const timer of this.stunDiagnosticTimers.values()) clearTimeout(timer)
+    this.stunDiagnosticTimers.clear()
+    this.stunErrorNotices.clear()
     this.retryAttempts.clear()
     this.generations.clear()
     this.futureIce.clear()
@@ -337,8 +395,71 @@ export class GameLinkClient {
     this.connections.set(member.id, connection)
     this.channels.set(member.id, {})
     this._setPeerState(member.id, this.connectedOnce.has(member.id) || this.retryAttempts.has(member.id) ? 'reconnecting' : 'connecting')
+    // STUN is contacted by the browser, so report its ICE errors at the client.
+    const stunUrls = [...new Set(this.iceServers.flatMap(server => server.urls))]
+    const stunFailures = new Map()
+    let publicCandidate = false
+    let gatheringReported = false
+    const current = () => !this.disposed && this.connections.get(member.id) === connection
+    const reportStun = (status, details = {}) => {
+      if (!current()) return
+      const diagnostic = { peerId: member.id, generation, status, urls: stunUrls,
+        failures: [...stunFailures.values()], publicCandidate, ...details }
+      this._emit('stun-status', diagnostic)
+      if (!diagnostic.message) return
+      // Three peers and continuous retries must not flood the same warning.
+      const key = diagnostic.code + ':' + (diagnostic.url || stunUrls.join(','))
+      const now = Date.now()
+      if (now - (this.stunErrorNotices.get(key) || 0) < 60000) return
+      this.stunErrorNotices.set(key, now)
+      const error = Object.assign(new Error(diagnostic.message), diagnostic, { name: 'GameLinkStunError' })
+      this._reportError(error)
+    }
+    const clearStunTimer = () => {
+      clearTimeout(this.stunDiagnosticTimers.get(connection))
+      this.stunDiagnosticTimers.delete(connection)
+    }
+    const finishStun = (timedOut = false) => {
+      if (!current() || gatheringReported || !stunUrls.length) return
+      gatheringReported = true
+      clearStunTimer()
+      if (publicCandidate) { reportStun('available'); return }
+      const normalize = url => url.toLowerCase().replace(/\?transport=udp$/, '')
+      const allFailed = stunUrls.every(url => [...stunFailures.keys()].some(failed => normalize(failed) === normalize(url)))
+      reportStun(allFailed ? 'failed' : 'unconfirmed', {
+        code: allFailed ? 'STUN_ALL_FAILED' : timedOut ? 'STUN_TIMEOUT' : 'STUN_NO_PUBLIC_CANDIDATE',
+        message: allFailed
+          ? 'STUN 失败：所有配置的 STUN 服务请求均失败，未获取公网连接地址。跨网络联机可能失败；局域网直连仍会继续尝试。'
+          : timedOut ? 'STUN 检测超时：10 秒内未获取公网连接地址，尚无法确认服务是否可达。跨网络联机可能失败，仍在尝试连接。'
+          : 'STUN 未获取公网连接地址，无法确认服务是否可达。跨网络联机可能失败，请检查网络或 STUN 配置。',
+      })
+    }
+    connection.onicecandidateerror = event => {
+      if (!current() || !/^stuns?:/i.test(event.url || '')) return
+      const failure = { url: event.url, errorCode: event.errorCode, errorText: event.errorText || '' }
+      stunFailures.set(event.url, failure)
+      reportStun('server-error', { ...failure, code: 'STUN_SERVER_ERROR',
+        message: `STUN 请求失败：${event.url}（错误码 ${event.errorCode}）。仍会尝试其他连接路径。`,
+      })
+      if (connection.iceGatheringState === 'complete' && !publicCandidate) { gatheringReported = false; finishStun() }
+    }
+    if (stunUrls.length) this.stunDiagnosticTimers.set(connection, setTimeout(() => { clearStunTimer(); finishStun(true) }, 10000))
+    connection.addEventListener('connectionstatechange', () => {
+      if (connection.connectionState === 'closed') clearStunTimer()
+    })
+    connection.onicegatheringstatechange = () => {
+      if (connection.iceGatheringState === 'complete') finishStun()
+    }
     connection.onicecandidate = (event) => {
-      if (!event.candidate || this.disposed || this.connections.get(member.id) !== connection) return
+      if (!current()) return
+      if (!event.candidate) { finishStun(); return }
+      if (event.candidate.type === 'srflx' || / typ srflx(?: |$)/.test(event.candidate.candidate)) {
+        if (!publicCandidate) {
+          publicCandidate = true
+          clearStunTimer()
+          reportStun('available')
+        }
+      }
       this._rememberIceCandidate(this.localIceAddresses, member.id, event.candidate.candidate)
       this._emitPeerState(member.id, this.peerStates.get(member.id) || 'connecting')
       this._sendSignal(member.id, 'webrtc_ice', { ...event.candidate.toJSON(), generation })
@@ -659,6 +780,7 @@ export class GameLinkClient {
       if (this.disposed || this.connections.get(signal.from) !== connection) return
       this._retryPeer(signal.from)
       this._reportError(error)
+      throw error
     }
   }
 
@@ -678,16 +800,28 @@ export class GameLinkClient {
     })
   }
 
-  async _request(path, method = 'GET', payload) {
-    const response = await fetch(`${this.serverUrl}${path}`, {
-      method,
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
-      headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
-      body: payload === undefined ? undefined : JSON.stringify(payload),
-    })
-    const body = await response.json().catch(() => null)
-    if (!response.ok) throw new Error(body?.error || body?.message || `GameLink request failed (${response.status})`)
-    return body
+  async _request(path, method = 'GET', payload, options = {}) {
+    if (payload !== undefined && this.memberToken) payload = { ...payload, auth_token: this.memberToken }
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    if (options.signal?.aborted) abort()
+    else options.signal?.addEventListener('abort', abort, { once: true })
+    const timeout = setTimeout(abort, options.timeoutMs || this.requestTimeoutMs)
+    try {
+      const response = await fetch(`${this.serverUrl}${path}`, {
+        method, signal: controller.signal,
+        headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+        body: payload === undefined ? undefined : JSON.stringify(payload),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok) { const error = new Error(body?.error || body?.message || `GameLink request failed (${response.status})`); error.status = response.status; throw error }
+      // Signaling and event endpoints acknowledge delivery with an empty 202.
+      if (![202, 204].includes(response.status) && body === null) throw new Error('Invalid GameLink JSON response')
+      return body
+    } finally {
+      clearTimeout(timeout)
+      options.signal?.removeEventListener('abort', abort)
+    }
   }
 
   _reportError(reason) {

@@ -40,6 +40,7 @@ gamesource/
 | 激斗四驱车 | `fc-mini-4wd` | `four-wheel/main.ts` | `public/four-wheel/index.html` |
 | 一起涂鸦 | `gamelink-doodle` | `doodle/main.ts` | `public/doodle/index.html` |
 | 飞行棋 | `gamelink-flight-chess` | `flight-chess/main.ts` | `public/flight-chess/index.html` |
+| 一起白板 | `gamelink-whiteboard` | `whiteboard/main.ts` | `public/whiteboard/index.html` |
 
 上表的源码入口相对于本目录，网页入口相对于 `game_web/`。
 
@@ -128,3 +129,7 @@ VITE_API_TARGET=http://127.0.0.1:8088
 接入已独立部署的第三方游戏，只需在游戏目录登记其入口网址，第三方页面按同样的参数与 SDK 协议接入，无需将其源码放入本目录。跨域请求需要服务端允许对应来源。
 
 进一步说明见 [网页项目 README](../../README.md) 和 [JavaScript SDK README](../../../../sdk/js/README.md)。
+
+## 午夜街头竞速
+
+`street-racer/` 为 Three.js 第三人称街头竞速游戏，独立入口 `/street-racer/index.html`，游戏 ID `gamelink-street-racer`。手机横屏陀螺仪转向与单个加速按钮，PC WASD 与 Enter，支持 4 人房间。参见 [竞速游戏说明](street-racer/README.md)。

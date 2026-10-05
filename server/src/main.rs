@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -13,36 +13,44 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, RwLock};
 use tracing::info;
 use uuid::Uuid;
-
-const MAX_MEMBERS: usize = 16;
+const MAX_MEMBERS: usize = 4;
 const MAX_PENDING_SIGNALS: usize = 256;
-
+const MAX_SIGNAL_BYTES: usize = 64 * 1024;
+const MAX_QUEUE_BYTES: usize = 256 * 1024;
+const SIGNAL_TTL: u64 = 60;
+const LONG_POLL_MS: u64 = 15_000;
 #[derive(Clone)]
 struct AppState {
-    inner: Arc<Mutex<ServerState>>,
+    inner: Arc<RwLock<HashMap<String, Arc<RoomCell>>>>,
     heartbeat_timeout: Duration,
 }
-
-#[derive(Default)]
-struct ServerState {
-    rooms: HashMap<String, Room>,
-    signals: HashMap<Uuid, VecDeque<Signal>>,
+struct RoomCell {
+    inner: Mutex<Room>,
+    changed: Notify,
 }
-
-#[derive(Clone, Serialize)]
 struct Room {
     id: String,
     code: String,
     game_id: String,
     members: HashMap<Uuid, Member>,
     next_ip: u16,
-    #[serde(skip)]
     empty_expires_at: Option<u64>,
+    signals: HashMap<Uuid, VecDeque<Signal>>,
+    revision: u64,
+    closed: bool,
+    generations: HashMap<(Uuid, Uuid), u64>,
 }
-
+impl RoomCell {
+    fn new(room: Room) -> Self {
+        Self {
+            inner: Mutex::new(room),
+            changed: Notify::new(),
+        }
+    }
+}
 #[derive(Clone, Serialize)]
 struct Member {
     id: Uuid,
@@ -111,6 +119,7 @@ struct JoinRequest {
 
 #[derive(Deserialize)]
 struct SignalRequest {
+    auth_token: Uuid,
     from: Uuid,
     to: Uuid,
     kind: String,
@@ -119,6 +128,9 @@ struct SignalRequest {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Signal {
+    #[serde(skip)]
+    bytes: usize,
+    id: Uuid,
     from: Uuid,
     kind: String,
     payload: serde_json::Value,
@@ -127,6 +139,7 @@ struct Signal {
 
 #[derive(Serialize, Deserialize)]
 struct PollResponse {
+    revision: u64,
     signals: Vec<Signal>,
     members: Vec<PublicMember>,
     relay: RelayInfo,
@@ -181,67 +194,7 @@ async fn cors(request: axum::extract::Request, next: axum::middleware::Next) -> 
     response
 }
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-    let bind = std::env::var("GAMELINK_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let timeout = std::env::var("GAMELINK_HEARTBEAT_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(30u64);
-    let state = AppState {
-        inner: Arc::new(Mutex::new(ServerState::default())),
-        heartbeat_timeout: Duration::from_secs(timeout),
-    };
-    let app = Router::new()
-        .route("/healthz", get(health))
-        .route("/v1/rooms", get(list_rooms).post(create_room))
-        .route("/v1/rooms/{code}/join", post(join_room))
-        .route("/v1/rooms/{code}", get(get_room))
-        .route("/v1/rooms/{code}/leave", post(leave_room))
-        .route("/v1/rooms/{code}/heartbeat", post(heartbeat))
-        .route("/v1/rooms/{code}/signals", post(send_signal))
-        .route("/v1/rooms/{code}/signals/poll", post(poll_signals))
-        .route("/v1/rooms/{code}/events", post(broadcast_event))
-        .layer(axum::middleware::from_fn(cors))
-        .with_state(state.clone());
-    tokio::spawn(cleanup_loop(state.clone()));
-    let listener = tokio::net::TcpListener::bind(&bind)
-        .await
-        .expect("bind server address");
-    info!(address = %bind, "GameLink signaling server listening");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .expect("serve HTTP");
-}
-
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status":"ok","service":"gamelink-server"}))
-}
-
-async fn list_rooms(State(state): State<AppState>) -> Json<Vec<RoomSummary>> {
-    let guard = state.inner.lock().await;
-    let mut rooms: Vec<RoomSummary> = guard
-        .rooms
-        .values()
-        .map(|room| RoomSummary {
-            code: room.code.clone(),
-            game_id: room.game_id.clone(),
-            member_count: room.members.len(),
-            max_members: MAX_MEMBERS,
-        })
-        .collect();
-    rooms.sort_by(|a, b| a.code.cmp(&b.code));
-    Json(rooms)
-}
-
-#[cfg(test)]
-fn test_app() -> Router {
+fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/v1/rooms", get(list_rooms).post(create_room))
@@ -252,12 +205,78 @@ fn test_app() -> Router {
         .route("/v1/rooms/{code}/signals", post(send_signal))
         .route("/v1/rooms/{code}/signals/poll", post(poll_signals))
         .route("/v1/rooms/{code}/events", post(broadcast_event))
-        .with_state(AppState {
-            inner: Arc::new(Mutex::new(ServerState::default())),
-            heartbeat_timeout: Duration::from_secs(30),
-        })
+        .layer(DefaultBodyLimit::max(96 * 1024))
+        .layer(axum::middleware::from_fn(cors))
+        .with_state(state)
 }
-
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    let bind = std::env::var("GAMELINK_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let timeout = std::env::var("GAMELINK_HEARTBEAT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30)
+        .max(20);
+    let state = AppState {
+        inner: Arc::new(RwLock::new(HashMap::new())),
+        heartbeat_timeout: Duration::from_secs(timeout),
+    };
+    tokio::spawn(cleanup_loop(state.clone()));
+    let listener = tokio::net::TcpListener::bind(&bind)
+        .await
+        .expect("bind server");
+    info!(address=%bind,version="1.2.0","GameLink signaling server listening");
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("serve HTTP");
+}
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status":"ok","service":"gamelink-server","version":"1.2.0"}))
+}
+async fn room_cell(state: &AppState, code: &str) -> Result<Arc<RoomCell>, ApiError> {
+    state
+        .inner
+        .read()
+        .await
+        .get(&normalize_code(code))
+        .cloned()
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))
+}
+fn auth(room: &Room, id: Uuid, token: Uuid) -> Result<(), ApiError> {
+    if room.closed {
+        return Err(ApiError(StatusCode::GONE, "room closed".into()));
+    }
+    match room.members.get(&id) {
+        Some(m) if m.resume_token == token => Ok(()),
+        _ => Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "invalid member credential".into(),
+        )),
+    }
+}
+async fn list_rooms(State(state): State<AppState>) -> Json<Vec<RoomSummary>> {
+    let cells: Vec<_> = state.inner.read().await.values().cloned().collect();
+    let mut rooms = Vec::new();
+    for cell in cells {
+        let r = cell.inner.lock().await;
+        if !r.closed {
+            rooms.push(RoomSummary {
+                code: r.code.clone(),
+                game_id: r.game_id.clone(),
+                member_count: r.members.len(),
+                max_members: MAX_MEMBERS,
+            })
+        }
+    }
+    rooms.sort_by(|a, b| a.code.cmp(&b.code));
+    Json(rooms)
+}
 async fn create_room(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -265,36 +284,24 @@ async fn create_room(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     validate_game_id(&req.game_id)?;
     validate_name(&req.player_name)?;
-    let id = Uuid::new_v4();
-    let code: String = rand::rng()
-        .sample_iter(&Alphanumeric)
-        .take(6)
-        .map(char::from)
-        .collect::<String>()
-        .to_uppercase();
-    let now = now_secs();
-    if req.create_only {
-        let room = Room {
-            id: Uuid::new_v4().to_string(),
-            code: code.clone(),
-            game_id: req.game_id,
-            members: HashMap::new(),
-            next_ip: 2,
-            empty_expires_at: Some(now + 120),
-        };
-        let response = serde_json::json!({ "room": {
-            "id": room.id, "code": room.code, "game_id": room.game_id,
-            "members": [],
-        }});
-        state.inner.lock().await.rooms.insert(code, room);
-        return Ok((StatusCode::CREATED, Json(response)));
-    }
+    let mut directory = state.inner.write().await;
+    let code = loop {
+        let code = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(6)
+            .map(char::from)
+            .collect::<String>()
+            .to_uppercase();
+        if !directory.contains_key(&code) {
+            break code;
+        }
+    };
     let member = Member {
-        id,
+        id: Uuid::new_v4(),
         name: req.player_name,
         virtual_ip: "10.77.0.2".into(),
         endpoint: peer,
-        last_seen: now,
+        last_seen: now_secs(),
         resume_token: Uuid::new_v4(),
         handoff_token: req.handoff.then(Uuid::new_v4),
     };
@@ -302,27 +309,33 @@ async fn create_room(
         id: Uuid::new_v4().to_string(),
         code: code.clone(),
         game_id: req.game_id,
-        members: HashMap::from([(id, member.clone())]),
-        next_ip: 3,
-        empty_expires_at: None,
+        members: if req.create_only {
+            HashMap::new()
+        } else {
+            HashMap::from([(member.id, member.clone())])
+        },
+        next_ip: if req.create_only { 2 } else { 3 },
+        empty_expires_at: req.create_only.then(|| now_secs() + 120),
+        signals: HashMap::new(),
+        revision: 1,
+        closed: false,
+        generations: HashMap::new(),
     };
     let view = room_view(&room);
-    let mut guard = state.inner.lock().await;
-    guard.rooms.insert(code, room);
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            serde_json::to_value(JoinResponse {
-                room: view,
-                self_member: public_member(&member),
-                resume_token: member.resume_token,
-                handoff_token: member.handoff_token,
-            })
-            .expect("serializable room response"),
-        ),
-    ))
+    let response = if req.create_only {
+        serde_json::json!({"room":view})
+    } else {
+        serde_json::to_value(JoinResponse {
+            room: view,
+            self_member: public_member(&member),
+            resume_token: member.resume_token,
+            handoff_token: member.handoff_token,
+        })
+        .unwrap()
+    };
+    directory.insert(code, Arc::new(RoomCell::new(room)));
+    Ok((StatusCode::CREATED, Json(response)))
 }
-
 async fn join_room(
     State(state): State<AppState>,
     Path(code): Path<String>,
@@ -331,339 +344,411 @@ async fn join_room(
 ) -> Result<Json<JoinResponse>, ApiError> {
     validate_game_id(&req.game_id)?;
     validate_name(&req.player_name)?;
-    let mut guard = state.inner.lock().await;
-    let room = guard
-        .rooms
-        .get_mut(&normalize_code(&code))
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    if room.game_id != req.game_id {
-        return Err(ApiError(
-            StatusCode::CONFLICT,
-            format!("game_id mismatch: room is for {}", room.game_id),
-        ));
+    let cell = room_cell(&state, &code).await?;
+    let mut r = cell.inner.lock().await;
+    if r.closed || r.empty_expires_at.is_some_and(|at| now_secs() >= at) {
+        return Err(ApiError(StatusCode::GONE, "room expired".into()));
     }
-    if room.empty_expires_at.is_some_and(|expires_at| now_secs() >= expires_at) {
-        return Err(ApiError(StatusCode::GONE, "empty room expired".into()));
+    if r.game_id != req.game_id {
+        return Err(ApiError(StatusCode::CONFLICT, "game_id mismatch".into()));
     }
-    if let Some(token) = req.handoff_token {
-        let id = room
-            .members
-            .values()
-            .find(|m| m.handoff_token == Some(token) && m.last_seen + 120 >= now_secs())
-            .map(|m| m.id)
-            .ok_or_else(|| {
-                ApiError(
-                    StatusCode::UNAUTHORIZED,
-                    "handoff token expired or already used".into(),
-                )
-            })?;
-        let member = room.members.get_mut(&id).unwrap();
-        member.handoff_token = None;
-        member.resume_token = Uuid::new_v4();
-        member.name = req.player_name;
-        member.endpoint = peer;
-        member.last_seen = now_secs();
-        let member = member.clone();
-        return Ok(Json(JoinResponse {
-            room: room_view(room),
-            self_member: public_member(&member),
-            resume_token: member.resume_token,
-            handoff_token: None,
-        }));
-    }
-    if let Some(token) = req.resume_token {
-        let resumed_id = room
-            .members
-            .values()
-            .find(|member| member.resume_token == token)
-            .map(|member| member.id);
-        if let Some(id) = resumed_id {
-            let member = room.members.get_mut(&id).expect("resumed member exists");
-            member.name = req.player_name;
-            member.endpoint = peer;
-            member.last_seen = now_secs();
-            let member = member.clone();
-            clear_member_signals(&mut guard, id);
-            let room = guard
-                .rooms
-                .get(&normalize_code(&code))
-                .expect("resumed room exists");
-            return Ok(Json(JoinResponse {
-                room: room_view(room),
-                self_member: public_member(&member),
-                resume_token: member.resume_token,
-                handoff_token: None,
-            }));
-        }
-    }
-    if room.members.len() >= MAX_MEMBERS {
-        return Err(ApiError(StatusCode::CONFLICT, "room is full".into()));
-    }
-    let id = Uuid::new_v4();
-    let ip = format!("10.77.0.{}", room.next_ip);
-    room.next_ip = room.next_ip.saturating_add(1);
-    let member = Member {
-        id,
-        name: req.player_name,
-        virtual_ip: ip,
-        endpoint: peer,
-        last_seen: now_secs(),
-        resume_token: Uuid::new_v4(),
-        handoff_token: None,
+    let resumed = if let Some(token) = req.handoff_token {
+        Some(
+            r.members
+                .values()
+                .find(|m| m.handoff_token == Some(token) && m.last_seen + 120 >= now_secs())
+                .map(|m| m.id)
+                .ok_or_else(|| {
+                    ApiError(
+                        StatusCode::UNAUTHORIZED,
+                        "handoff token expired or already used".into(),
+                    )
+                })?,
+        )
+    } else if let Some(token) = req.resume_token {
+        Some(
+            r.members
+                .values()
+                .find(|m| m.resume_token == token)
+                .map(|m| m.id)
+                .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "resume token expired".into()))?,
+        )
+    } else {
+        None
     };
-    room.empty_expires_at = None;
-    room.members.insert(id, member.clone());
-    Ok(Json(JoinResponse {
-        room: room_view(room),
+    let member = if let Some(id) = resumed {
+        let m = r.members.get_mut(&id).unwrap();
+        m.name = req.player_name;
+        m.endpoint = peer;
+        m.last_seen = now_secs();
+        if req.handoff_token.is_some() {
+            m.handoff_token = None;
+            m.resume_token = Uuid::new_v4()
+        }
+        let member = m.clone();
+        clear_member_signals(&mut r, id);
+        member
+    } else {
+        if r.members.len() >= MAX_MEMBERS {
+            return Err(ApiError(StatusCode::CONFLICT, "room is full".into()));
+        }
+        let m = Member {
+            id: Uuid::new_v4(),
+            name: req.player_name,
+            virtual_ip: format!("10.77.0.{}", r.next_ip),
+            endpoint: peer,
+            last_seen: now_secs(),
+            resume_token: Uuid::new_v4(),
+            handoff_token: None,
+        };
+        r.next_ip = r.next_ip.saturating_add(1);
+        r.members.insert(m.id, m.clone());
+        m
+    };
+    r.empty_expires_at = None;
+    r.revision += 1;
+    let response = JoinResponse {
+        room: room_view(&r),
         self_member: public_member(&member),
         resume_token: member.resume_token,
         handoff_token: None,
-    }))
+    };
+    drop(r);
+    cell.changed.notify_waiters();
+    Ok(Json(response))
 }
-
 async fn get_room(
     State(state): State<AppState>,
     Path(code): Path<String>,
 ) -> Result<Json<RoomView>, ApiError> {
-    let guard = state.inner.lock().await;
-    let room = guard
-        .rooms
-        .get(&normalize_code(&code))
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    Ok(Json(room_view(room)))
+    let cell = room_cell(&state, &code).await?;
+    let r = cell.inner.lock().await;
+    if r.closed {
+        return Err(ApiError(StatusCode::GONE, "room closed".into()));
+    }
+    Ok(Json(room_view(&r)))
 }
-
+#[derive(Deserialize)]
+struct MemberRequest {
+    member_id: Uuid,
+    auth_token: Uuid,
+}
+#[derive(Deserialize)]
+struct PollRequest {
+    member_id: Uuid,
+    auth_token: Uuid,
+    #[serde(default)]
+    ack_ids: Vec<Uuid>,
+    #[serde(default)]
+    revision: Option<u64>,
+    #[serde(default)]
+    wait_ms: u64,
+}
+async fn delete_closed(state: &AppState, code: &str, cell: &Arc<RoomCell>) {
+    let mut dir = state.inner.write().await;
+    if dir.get(code).is_some_and(|other| Arc::ptr_eq(other, cell)) {
+        dir.remove(code);
+    }
+}
 async fn leave_room(
     State(state): State<AppState>,
     Path(code): Path<String>,
     Json(req): Json<MemberRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let mut guard = state.inner.lock().await;
-    remove_member(&mut guard, &normalize_code(&code), req.member_id)?;
+    let cell = room_cell(&state, &code).await?;
+    let mut r = cell.inner.lock().await;
+    auth(&r, req.member_id, req.auth_token)?;
+    remove_member(&mut r, req.member_id);
+    let closed = r.closed;
+    let code = r.code.clone();
+    drop(r);
+    cell.changed.notify_waiters();
+    if closed {
+        delete_closed(&state, &code, &cell).await
+    }
     Ok(StatusCode::NO_CONTENT)
 }
-
-#[derive(Deserialize)]
-struct MemberRequest {
-    member_id: Uuid,
-}
-
 async fn heartbeat(
     State(state): State<AppState>,
     Path(code): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<MemberRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let mut guard = state.inner.lock().await;
-    let room = guard
-        .rooms
-        .get_mut(&normalize_code(&code))
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    let member = room
-        .members
-        .get_mut(&req.member_id)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "member not found".into()))?;
-    member.endpoint = peer;
-    member.last_seen = now_secs();
+    let cell = room_cell(&state, &code).await?;
+    let mut r = cell.inner.lock().await;
+    auth(&r, req.member_id, req.auth_token)?;
+    let m = r.members.get_mut(&req.member_id).unwrap();
+    m.endpoint = peer;
+    m.last_seen = now_secs();
     Ok(StatusCode::NO_CONTENT)
 }
-
+fn prune_signals(r: &mut Room) {
+    let now = now_secs();
+    r.signals.retain(|_, queue| {
+        queue.retain(|s| now.saturating_sub(s.sent_at) < SIGNAL_TTL);
+        !queue.is_empty()
+    });
+}
+fn signal_bytes(s: &Signal) -> usize {
+    s.bytes
+}
+fn measure_signal(mut s: Signal) -> Signal {
+    s.bytes = serde_json::to_vec(&s).map_or(MAX_SIGNAL_BYTES + 1, |b| b.len());
+    s
+}
+fn ensure_capacity(r: &Room, to: Uuid, size: usize) -> Result<(), ApiError> {
+    if size > MAX_SIGNAL_BYTES {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "signal exceeds 64 KiB".into(),
+        ));
+    }
+    if let Some(q) = r.signals.get(&to) {
+        if q.len() >= MAX_PENDING_SIGNALS
+            || q.iter().map(signal_bytes).sum::<usize>() + size > MAX_QUEUE_BYTES
+        {
+            return Err(ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "recipient signal queue is full".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+fn enqueue(r: &mut Room, to: Uuid, signal: Signal) -> Result<(), ApiError> {
+    let signal = measure_signal(signal);
+    if signal.bytes > MAX_SIGNAL_BYTES {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "signal exceeds 64 KiB".into(),
+        ));
+    }
+    prune_signals(r);
+    if signal.kind.starts_with("webrtc_") {
+        if let Some(g) = signal.payload.get("generation").and_then(|v| v.as_u64()) {
+            let pair = if signal.from < to {
+                (signal.from, to)
+            } else {
+                (to, signal.from)
+            };
+            let previous = r.generations.get(&pair).copied().unwrap_or(0);
+            if g < previous {
+                return Ok(());
+            }
+            if g > previous {
+                for (recipient, q) in &mut r.signals {
+                    q.retain(|s| {
+                        !((*recipient == to && s.from == signal.from)
+                            || (*recipient == signal.from && s.from == to))
+                            || !s.kind.starts_with("webrtc_")
+                            || s.payload
+                                .get("generation")
+                                .and_then(|v| v.as_u64())
+                                .is_none_or(|v| v >= g)
+                    })
+                }
+                r.generations.insert(pair, g);
+            }
+        }
+    }
+    ensure_capacity(r, to, signal_bytes(&signal))?;
+    r.signals.entry(to).or_default().push_back(signal);
+    Ok(())
+}
 async fn send_signal(
     State(state): State<AppState>,
     Path(code): Path<String>,
     Json(req): Json<SignalRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if req.kind.len() > 32 {
+    if req.kind.is_empty() || req.kind.len() > 32 {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "signal kind is too long".into(),
+            "invalid signal kind".into(),
         ));
     }
-    let mut guard = state.inner.lock().await;
-    let room = guard
-        .rooms
-        .get(&normalize_code(&code))
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    if !room.members.contains_key(&req.from) || !room.members.contains_key(&req.to) {
+    let cell = room_cell(&state, &code).await?;
+    let mut r = cell.inner.lock().await;
+    auth(&r, req.from, req.auth_token)?;
+    if req.from == req.to || !r.members.contains_key(&req.to) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "sender and recipient must belong to the room".into(),
+            "recipient must be another room member".into(),
         ));
     }
-    let queue = guard.signals.entry(req.to).or_default();
-    if queue.len() >= MAX_PENDING_SIGNALS {
-        return Err(ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "recipient signal queue is full".into(),
-        ));
-    }
-    queue.push_back(Signal {
-        from: req.from,
-        kind: req.kind,
-        payload: req.payload,
-        sent_at: now_secs(),
-    });
+    enqueue(
+        &mut r,
+        req.to,
+        Signal {
+            bytes: 0,
+            id: Uuid::new_v4(),
+            from: req.from,
+            kind: req.kind,
+            payload: req.payload,
+            sent_at: now_secs(),
+        },
+    )?;
+    drop(r);
+    cell.changed.notify_waiters();
     Ok(StatusCode::ACCEPTED)
 }
-
 #[derive(Deserialize)]
 struct BroadcastRequest {
     from: Uuid,
+    auth_token: Uuid,
     kind: String,
     payload: serde_json::Value,
 }
-
 async fn broadcast_event(
     State(state): State<AppState>,
     Path(code): Path<String>,
     Json(req): Json<BroadcastRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if req.kind.len() > 32 {
+    if req.kind.is_empty() || req.kind.len() > 32 {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "event kind is too long".into(),
+            "invalid event kind".into(),
         ));
     }
-    let mut guard = state.inner.lock().await;
-    let room = guard
-        .rooms
-        .get(&normalize_code(&code))
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    if !room.members.contains_key(&req.from) {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "sender must belong to the room".into(),
-        ));
-    }
-    let recipients: Vec<Uuid> = room
+    let cell = room_cell(&state, &code).await?;
+    let mut r = cell.inner.lock().await;
+    auth(&r, req.from, req.auth_token)?;
+    prune_signals(&mut r);
+    let recipients: Vec<_> = r
         .members
         .keys()
         .copied()
         .filter(|id| *id != req.from)
         .collect();
-    if recipients.iter().any(|id| {
-        guard
-            .signals
-            .get(id)
-            .is_some_and(|queue| queue.len() >= MAX_PENDING_SIGNALS)
-    }) {
-        return Err(ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "room event queue is full".into(),
-        ));
+    let signal = measure_signal(Signal {
+        bytes: 0,
+        id: Uuid::new_v4(),
+        from: req.from,
+        kind: req.kind,
+        payload: req.payload,
+        sent_at: now_secs(),
+    });
+    let size = signal_bytes(&signal);
+    for id in &recipients {
+        ensure_capacity(&r, *id, size)?
     }
-    let sent_at = now_secs();
-    for recipient in recipients {
-        guard
-            .signals
-            .entry(recipient)
-            .or_default()
-            .push_back(Signal {
-                from: req.from,
-                kind: req.kind.clone(),
-                payload: req.payload.clone(),
-                sent_at,
-            });
+    for id in recipients {
+        r.signals.entry(id).or_default().push_back(signal.clone());
     }
+    drop(r);
+    cell.changed.notify_waiters();
     Ok(StatusCode::ACCEPTED)
 }
-
 async fn poll_signals(
     State(state): State<AppState>,
     Path(code): Path<String>,
-    Json(req): Json<MemberRequest>,
+    Json(req): Json<PollRequest>,
 ) -> Result<Json<PollResponse>, ApiError> {
-    let mut guard = state.inner.lock().await;
-    let room = guard
-        .rooms
-        .get_mut(&normalize_code(&code))
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    let member = room
-        .members
-        .get_mut(&req.member_id)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "member not found".into()))?;
-    member.last_seen = now_secs();
-    let members = room
-        .members
-        .values()
-        .filter(|m| m.id != req.member_id)
-        .map(public_member)
-        .collect();
-    let signals = guard
-        .signals
-        .remove(&req.member_id)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    Ok(Json(PollResponse {
-        signals,
-        members,
-        relay: RelayInfo {
-            available: false,
-            transport: "udp-relay-v1 (not enabled)".into(),
-        },
-    }))
-}
-
-fn remove_member(state: &mut ServerState, code: &str, member_id: Uuid) -> Result<(), ApiError> {
-    let room = state
-        .rooms
-        .get_mut(code)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "room not found".into()))?;
-    if room.members.remove(&member_id).is_none() {
-        return Err(ApiError(StatusCode::NOT_FOUND, "member not found".into()));
+    if req.ack_ids.len() > MAX_PENDING_SIGNALS {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "too many acknowledgements".into(),
+        ));
     }
-    state.signals.remove(&member_id);
-    if room.members.is_empty() {
-        state.rooms.remove(code);
+    let cell = room_cell(&state, &code).await?;
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_millis(req.wait_ms.min(LONG_POLL_MS));
+    let mut first = true;
+    loop {
+        // Register before checking state to avoid losing a notification between checking and awaiting.
+        let notified = cell.changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let mut r = cell.inner.lock().await;
+        auth(&r, req.member_id, req.auth_token)?;
+        r.members.get_mut(&req.member_id).unwrap().last_seen = now_secs();
+        prune_signals(&mut r);
+        if first {
+            if let Some(q) = r.signals.get_mut(&req.member_id) {
+                q.retain(|s| !req.ack_ids.contains(&s.id));
+            }
+            first = false;
+        }
+        let has_signals = r.signals.get(&req.member_id).is_some_and(|q| !q.is_empty());
+        if has_signals
+            || req.revision != Some(r.revision)
+            || tokio::time::Instant::now() >= deadline
+        {
+            let response = PollResponse {
+                revision: r.revision,
+                signals: r
+                    .signals
+                    .get(&req.member_id)
+                    .map(|q| q.iter().cloned().collect())
+                    .unwrap_or_default(),
+                members: r
+                    .members
+                    .values()
+                    .filter(|m| m.id != req.member_id)
+                    .map(public_member)
+                    .collect(),
+                relay: RelayInfo {
+                    available: false,
+                    transport: "p2p-only".into(),
+                },
+            };
+            return Ok(Json(response));
+        }
+        drop(r);
+        let _ = tokio::time::timeout_at(deadline, notified).await;
     }
-    Ok(())
 }
-
-fn clear_member_signals(state: &mut ServerState, member_id: Uuid) {
-    state.signals.remove(&member_id);
-    for queue in state.signals.values_mut() {
-        queue.retain(|signal| signal.from != member_id);
+fn clear_member_signals(r: &mut Room, id: Uuid) {
+    r.signals.remove(&id);
+    for q in r.signals.values_mut() {
+        q.retain(|s| s.from != id);
+    }
+    r.generations.retain(|(a, b), _| *a != id && *b != id);
+}
+fn remove_member(r: &mut Room, id: Uuid) {
+    r.members.remove(&id);
+    clear_member_signals(r, id);
+    r.revision += 1;
+    if r.members.is_empty() {
+        r.closed = true
     }
 }
-
 async fn cleanup_loop(state: AppState) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     loop {
         interval.tick().await;
-        let cutoff = now_secs().saturating_sub(state.heartbeat_timeout.as_secs());
-        let mut guard = state.inner.lock().await;
-        let mut removed = Vec::new();
-        let mut stale_all = Vec::new();
-        for (code, room) in guard.rooms.iter_mut() {
-            let stale: Vec<Uuid> = room
+        let cells: Vec<_> = state.inner.read().await.values().cloned().collect();
+        for cell in cells {
+            let mut r = cell.inner.lock().await;
+            let now = now_secs();
+            let cutoff = now.saturating_sub(state.heartbeat_timeout.as_secs());
+            let stale: Vec<_> = r
                 .members
                 .values()
                 .filter(|m| {
-                    m.last_seen < cutoff
-                        && !(m.handoff_token.is_some() && m.last_seen + 120 >= now_secs())
+                    m.last_seen < cutoff && !(m.handoff_token.is_some() && m.last_seen + 120 >= now)
                 })
                 .map(|m| m.id)
                 .collect();
-            for member in stale {
-                room.members.remove(&member);
-                stale_all.push(member);
+            let changed = !stale.is_empty();
+            for id in stale {
+                remove_member(&mut r, id)
             }
-            if room.members.is_empty() {
-                if room.empty_expires_at.is_none_or(|expires| now_secs() >= expires) {
-                    removed.push(code.clone());
-                }
+            prune_signals(&mut r);
+            if r.members.is_empty() && r.empty_expires_at.is_none_or(|at| now >= at) {
+                r.closed = true
             }
-        }
-        for member in stale_all {
-            guard.signals.remove(&member);
-        }
-        for code in removed {
-            guard.rooms.remove(&code);
+            let closed = r.closed;
+            let code = r.code.clone();
+            drop(r);
+            if changed || closed {
+                cell.changed.notify_waiters()
+            }
+            if closed {
+                delete_closed(&state, &code, &cell).await
+            }
         }
     }
 }
-
 fn public_member(member: &Member) -> PublicMember {
     PublicMember {
         id: member.id,
@@ -714,7 +799,13 @@ fn now_secs() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
-
+#[cfg(test)]
+fn test_app() -> Router {
+    router(AppState {
+        inner: Arc::new(RwLock::new(HashMap::new())),
+        heartbeat_timeout: Duration::from_secs(30),
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,92 +879,7 @@ mod tests {
     fn code_normalization_is_case_insensitive() {
         assert_eq!(normalize_code(" ab12cd "), "AB12CD");
     }
-    #[test]
-    fn removing_any_member_keeps_room_without_promotion() {
-        let first = Uuid::new_v4();
-        let guest = Uuid::new_v4();
-        let member = |id, ip: &str| Member {
-            id,
-            name: "p".into(),
-            virtual_ip: ip.into(),
-            endpoint: "127.0.0.1:1000".parse().unwrap(),
-            last_seen: 1,
-            resume_token: Uuid::new_v4(),
-            handoff_token: None,
-        };
-        let mut state = ServerState {
-            rooms: HashMap::from([(
-                "ABC123".into(),
-                Room {
-                    id: "r".into(),
-                    code: "ABC123".into(),
-                    game_id: "tank-arena".into(),
-                    members: HashMap::from([
-                        (first, member(first, "10.77.0.2")),
-                        (guest, member(guest, "10.77.0.3")),
-                    ]),
-                    next_ip: 4,
-                    empty_expires_at: None,
-                },
-            )]),
-            signals: HashMap::new(),
-        };
-        remove_member(&mut state, "ABC123", first).unwrap();
-        assert!(state.rooms["ABC123"].members.contains_key(&guest));
-        assert_eq!(state.rooms["ABC123"].members.len(), 1);
-    }
-    #[test]
-    fn removing_last_member_deletes_room() {
-        let id = Uuid::new_v4();
-        let mut state = ServerState {
-            rooms: HashMap::from([(
-                "ABC123".into(),
-                Room {
-                    id: "r".into(),
-                    code: "ABC123".into(),
-                    game_id: "tank-arena".into(),
-                    members: HashMap::from([(
-                        id,
-                        Member {
-                            id,
-                            name: "p".into(),
-                            virtual_ip: "10.77.0.2".into(),
-                            endpoint: "127.0.0.1:1000".parse().unwrap(),
-                            last_seen: 1,
-                            resume_token: Uuid::new_v4(),
-                            handoff_token: None,
-                        },
-                    )]),
-                    next_ip: 3,
-                    empty_expires_at: None,
-                },
-            )]),
-            signals: HashMap::new(),
-        };
-        remove_member(&mut state, "ABC123", id).unwrap();
-        assert!(state.rooms.is_empty());
-    }
-    #[test]
-    fn resuming_member_clears_stale_signals_in_both_directions() {
-        let resumed = Uuid::new_v4();
-        let peer = Uuid::new_v4();
-        let signal = |from| Signal {
-            from,
-            kind: "webrtc_offer".into(),
-            payload: serde_json::json!({}),
-            sent_at: now_secs(),
-        };
-        let mut state = ServerState {
-            rooms: HashMap::new(),
-            signals: HashMap::from([
-                (resumed, VecDeque::from([signal(peer)])),
-                (peer, VecDeque::from([signal(resumed)])),
-            ]),
-        };
-        clear_member_signals(&mut state, resumed);
-        assert!(!state.signals.contains_key(&resumed));
-        assert!(state.signals[&peer].is_empty());
-    }
+
     #[tokio::test]
     async fn create_join_discover_and_leave_room() {
         let app = test_app().layer(MockConnectInfo(
@@ -957,7 +963,7 @@ mod tests {
                     .uri(format!("/v1/rooms/{}/leave", created.room.code))
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        serde_json::json!({"member_id":joined.self_member.id}).to_string(),
+                        serde_json::json!({"member_id":joined.self_member.id,"auth_token":joined.resume_token}).to_string(),
                     ))
                     .unwrap(),
             )
@@ -1004,7 +1010,7 @@ mod tests {
         let joined: JoinResponse =
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        let signal = serde_json::json!({"from":created.self_member.id,"to":joined.self_member.id,"kind":"offer","payload":{"sdp":"test"}}).to_string();
+        let signal = serde_json::json!({"auth_token":created.resume_token,"from":created.self_member.id,"to":joined.self_member.id,"kind":"offer","payload":{"sdp":"test"}}).to_string();
         let response = app
             .clone()
             .oneshot(
@@ -1018,7 +1024,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let poll = serde_json::json!({"member_id":joined.self_member.id}).to_string();
+        let poll =
+            serde_json::json!({"member_id":joined.self_member.id,"auth_token":joined.resume_token})
+                .to_string();
         let response = app
             .clone()
             .oneshot(
@@ -1039,5 +1047,70 @@ mod tests {
         assert_eq!(body.signals[0].kind, "offer");
         assert_eq!(body.members.len(), 1);
         assert!(!body.relay.available);
+    }
+
+    fn fixture_room() -> Room {
+        Room {
+            id: "r".into(),
+            code: "ABC123".into(),
+            game_id: "tank-arena".into(),
+            members: HashMap::new(),
+            next_ip: 2,
+            empty_expires_at: None,
+            signals: HashMap::new(),
+            revision: 1,
+            closed: false,
+            generations: HashMap::new(),
+        }
+    }
+    fn fixture_member(id: Uuid) -> Member {
+        Member {
+            id,
+            name: "p".into(),
+            virtual_ip: "10.77.0.2".into(),
+            endpoint: "127.0.0.1:1000".parse().unwrap(),
+            last_seen: now_secs(),
+            resume_token: Uuid::new_v4(),
+            handoff_token: None,
+        }
+    }
+    #[test]
+    fn removing_any_member_keeps_room_without_promotion() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let mut r = fixture_room();
+        r.members.insert(a, fixture_member(a));
+        r.members.insert(b, fixture_member(b));
+        remove_member(&mut r, a);
+        assert!(r.members.contains_key(&b));
+        assert!(!r.closed);
+    }
+    #[test]
+    fn removing_last_member_deletes_room() {
+        let a = Uuid::new_v4();
+        let mut r = fixture_room();
+        r.members.insert(a, fixture_member(a));
+        remove_member(&mut r, a);
+        assert!(r.closed);
+        assert!(r.members.is_empty());
+    }
+    #[test]
+    fn resuming_member_clears_stale_signals_in_both_directions() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let mut r = fixture_room();
+        let signal = |from| Signal {
+            bytes: 0,
+            id: Uuid::new_v4(),
+            from,
+            kind: "webrtc_offer".into(),
+            payload: serde_json::json!({}),
+            sent_at: now_secs(),
+        };
+        r.signals.insert(a, VecDeque::from([signal(b)]));
+        r.signals.insert(b, VecDeque::from([signal(a)]));
+        clear_member_signals(&mut r, a);
+        assert!(!r.signals.contains_key(&a));
+        assert!(r.signals[&b].is_empty());
     }
 }

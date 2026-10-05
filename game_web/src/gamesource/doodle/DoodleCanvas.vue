@@ -1,20 +1,22 @@
 <script setup lang="ts">
+import DoodleLogo from './DoodleLogo.vue'
+import UiIcon from "../shared/UiIcon.vue"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { GameLinkClient, GameLinkMember } from '../../../../sdk/js/gamelink.js'
 
 type Point = { x: number; y: number }
 type Brush = 'pen'|'pencil'|'marker'|'highlighter'|'spray'|'neon'|'crayon'
-type Stroke = { id: string; owner: string; name: string; color: string; width: number; brush: Brush; space?: 'world'; points: Point[] }
-const props = defineProps<{ client?: GameLinkClient; self: GameLinkMember; members: GameLinkMember[] }>()
+type Stroke = { id: string; owner: string; name: string; color: string; width: number; brush: Brush; space?: 'world'; round?: number; points: Point[] }
+const props = defineProps<{ client?: GameLinkClient; self: GameLinkMember; members: GameLinkMember[]; topicRound:number }>()
 const COLORS = ['#26332f','#f06b53','#f3a83b','#edcf51','#77ae73','#50a9a1','#5d83c8','#a279c7','#e783a5','#ffffff']
 const canvas = ref<HTMLCanvasElement>(), wrap = ref<HTMLElement>()
 const color = ref(COLORS[0]!), size = ref(7), tool = ref<'pen'|'eraser'|'pan'>('pen')
 const brush = ref<Brush>('pen')
-const brushes: { id: Brush; name: string; icon: string }[] = [
-  { id: 'pen', name: '圆头笔', icon: '✎' }, { id: 'pencil', name: '铅笔', icon: '／' },
-  { id: 'marker', name: '马克笔', icon: '▰' }, { id: 'highlighter', name: '荧光笔', icon: '▱' },
-  { id: 'spray', name: '喷枪', icon: '✺' }, { id: 'neon', name: '霓虹笔', icon: '✧' },
-  { id: 'crayon', name: '蜡笔', icon: '❋' },
+const brushes: { id: Brush; name: string }[] = [
+  { id: 'pen', name: '圆头笔' }, { id: 'pencil', name: '铅笔' },
+  { id: 'marker', name: '马克笔' }, { id: 'highlighter', name: '荧光笔' },
+  { id: 'spray', name: '喷枪' }, { id: 'neon', name: '霓虹笔' },
+  { id: 'crayon', name: '蜡笔' },
 ]
 const strokes = ref<Stroke[]>([]), undoStack = ref<string[]>([]), redoStack = ref<Stroke[]>([])
 const active = ref(false), showHelp = ref(false)
@@ -104,6 +106,7 @@ function scaled(stroke: Stroke): Stroke {
   return { ...stroke, width: stroke.width*c.zoom, points: stroke.points.map(p => ({ x:p.x*c.zoom+c.x, y:p.y*c.zoom+c.y })) }
 }
 function down(event: PointerEvent) {
+  if (!props.topicRound) return
   if (event.button !== 0 && event.button !== 1 && event.pointerType !== 'touch') return
   event.preventDefault(); canvas.value!.setPointerCapture(event.pointerId)
   pointers.set(event.pointerId, localPoint(event))
@@ -117,7 +120,7 @@ function down(event: PointerEvent) {
   gesture = tool.value === 'pan' || spaceHeld || event.button === 1
   if (gesture) return
   drawing = true; active.value = true
-  current = { id: `${props.self.id}:${crypto.randomUUID()}`, owner: props.self.id, name: props.self.name, space:'world', color: tool.value === 'eraser' ? 'erase' : color.value, width: tool.value === 'eraser' ? size.value * 3 : size.value, brush: tool.value === 'eraser' ? 'pen' : brush.value, points: [point(event)] }
+  current = { id: `${props.self.id}:${crypto.randomUUID()}`, owner: props.self.id, name: props.self.name, space:'world', round:props.topicRound, color: tool.value === 'eraser' ? 'erase' : color.value, width: tool.value === 'eraser' ? size.value * 3 : size.value, brush: tool.value === 'eraser' ? 'pen' : brush.value, points: [point(event)] }
   lastProgressAt = performance.now(); props.client?.send('doodle-progress', current, { reliability: 'unreliable' }); scheduleDraw()
 }
 function move(event: PointerEvent) {
@@ -159,6 +162,7 @@ function up() {
 }
 function addRemote(raw: Record<string, unknown>, final = true) {
   if (typeof raw.id === 'string' && cancelled.has(raw.id)) return
+  if (props.topicRound > 0 && raw.round !== props.topicRound) return
   if (typeof raw.id !== 'string' || typeof raw.owner !== 'string' || typeof raw.color !== 'string' || !Array.isArray(raw.points) || !raw.points.length || raw.points.length > 320 || finished.has(raw.id)) return
   if (typeof raw.width !== 'number' || !Number.isFinite(raw.width) || raw.width < 1 || raw.width > 100 || raw.color !== 'erase' && !/^#[\da-f]{6}$/i.test(raw.color)) return
   const allowedBrushes: Brush[] = ['pen','pencil','marker','highlighter','spray','neon','crayon']
@@ -195,6 +199,11 @@ function clearBoard() {
   strokes.value = []; undoStack.value = []; redoStack.value = []; finished.clear(); props.client?.send('doodle-clear', {}, { reliability: 'reliable' }); redraw()
 }
 function clearRemote() { strokes.value = []; undoStack.value = []; redoStack.value = []; finished.clear(); redraw() }
+function clearForTopic() {
+  if(current){cancelled.add(current.id);props.client?.send('doodle-cancel',{id:current.id},{reliability:'reliable'})}
+  current=null;drawing=false;active.value=false;pointers.clear();gesture=false
+  clearRemote()
+}
 function sendSnapshot(target: string) {
   const complete = strokes.value.filter(stroke => finished.has(stroke.id))
   for (let i = 0; i < complete.length; i += 5) props.client?.send('doodle-snapshot', { strokes: complete.slice(i, i + 5) }, { target, reliability: 'reliable' })
@@ -226,7 +235,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => { observer?.disconnect(); cancelAnimationFrame(frame); removeEventListener('keydown', hotkey); removeEventListener('keyup', keyUp); removeEventListener('blur', blur) })
 watch(() => props.members, () => nextTick(redraw), { deep: true })
-defineExpose({ cancelStroke, addRemote, addSnapshot, removeStroke, clearRemote, sendSnapshot, handshake })
+defineExpose({ cancelStroke, addRemote, addSnapshot, removeStroke, clearRemote, clearForTopic, sendSnapshot, handshake })
 </script>
 
 <template>
@@ -234,22 +243,22 @@ defineExpose({ cancelStroke, addRemote, addSnapshot, removeStroke, clearRemote, 
     <aside class="doodle-tools">
       <div class="tool-group"><small>画笔颜色</small><div class="doodle-palette"><button v-for="swatch in palette" :key="swatch" :class="{ selected: color === swatch && tool === 'pen' }" :style="{ '--swatch': swatch }" :aria-label="`选择颜色 ${swatch}`" @click="color = swatch; tool = 'pen'" /></div></div>
       <i class="tool-divider"></i>
-      <div class="brush-picker" role="group" aria-label="选择笔刷"><button v-for="item in brushes" :key="item.id" :class="{ selected: brush === item.id && tool === 'pen' }" :aria-label="item.name" :title="item.name" @click="brush = item.id; tool = 'pen'"><i>{{ item.icon }}</i><small>{{ item.name }}</small></button></div>
+      <div class="brush-picker" role="group" aria-label="选择笔刷"><button v-for="item in brushes" :key="item.id" :class="{ selected: brush === item.id && tool === 'pen' }" :aria-pressed="brush === item.id && tool === 'pen'" :aria-label="item.name" :title="item.name" @click="brush = item.id; tool = 'pen'"><UiIcon :name="item.id" /><small>{{ item.name }}</small></button></div>
       <div class="tool-group size-group"><small>粗细 <b>{{ size }}</b></small><input v-model.number="size" type="range" min="2" max="24" aria-label="笔刷粗细" /></div>
       <i class="tool-divider"></i>
-      <div class="tool-actions"><button :class="{ active: tool === 'pan' }" aria-label="移动画布" title="移动画布 H / 空格" @click="tool='pan'">✥</button><button :class="{ active: tool === 'pen' }" aria-label="画笔" title="画笔" @click="tool='pen'">✎</button><button :class="{ active: tool === 'eraser' }" aria-label="橡皮擦" title="橡皮擦" @click="tool='eraser'">⌫</button><button :disabled="!canUndo" aria-label="撤销" title="撤销 Ctrl/⌘ Z" @click="undo">↶</button><button :disabled="!canRedo" aria-label="重做" title="重做 Ctrl/⌘ Shift Z" @click="redo">↷</button></div>
+      <div class="tool-actions"><button class="gl-action" :class="{ active: tool === 'pan' }" :aria-pressed="tool === 'pan'" aria-label="移动画布" title="移动画布 H / 空格" @click="tool='pan'"><UiIcon name="pan" /></button><button class="gl-action" :class="{ active: tool === 'pen' }" :aria-pressed="tool === 'pen'" aria-label="画笔" title="画笔" @click="tool='pen'"><UiIcon name="pen" /></button><button class="gl-action" :class="{ active: tool === 'eraser' }" :aria-pressed="tool === 'eraser'" aria-label="橡皮擦" title="橡皮擦" @click="tool='eraser'"><UiIcon name="eraser" /></button><button class="gl-action" :disabled="!canUndo" aria-label="撤销" title="撤销 Ctrl/⌘ Z" @click="undo"><UiIcon name="undo" /></button><button class="gl-action" :disabled="!canRedo" aria-label="重做" title="重做 Ctrl/⌘ Shift Z" @click="redo"><UiIcon name="redo" /></button></div>
       <i class="tool-divider"></i>
-      <button class="clear-button" :disabled="!strokes.length" @click="clearBoard">清空画布</button>
-      <button class="save-button" @click="download">保存视野 ↓</button>
+      <button class="gl-action clear-button" :disabled="!strokes.length" @click="clearBoard"><UiIcon name="trash" />清空画布</button>
+      <button class="gl-action save-button" @click="download"><UiIcon name="download" />保存视野</button>
     </aside>
     <div ref="wrap" class="paper-wrap" :class="{ drawing: active, panning: tool === 'pan' }" :style="gridStyle">
       <div class="paper-caption"><span>无限画室 / INFINITE STUDIO</span><span>{{ strokes.length }} 笔创作</span></div>
       <canvas ref="canvas" class="shared-canvas" @pointerdown="down" @pointermove="move" @pointerup="endPointer" @pointercancel="endPointer" @lostpointercapture="endPointer" @wheel="wheel" @contextmenu.prevent />
-      <div v-if="!strokes.length" class="paper-empty" @click="showHelp=true"><span>✳</span><b>在这里，让想象铺开</b><small>单指绘画 · 双指移动与缩放 · 每个人都有自己的视角</small></div>
-      <div class="view-controls"><button aria-label="缩小" @click="zoomAt(1/1.25)">−</button><span>{{ zoomLabel }}</span><button aria-label="放大" @click="zoomAt(1.25)">+</button><button class="origin-button" @click="resetView">回到原点 ⌖</button></div>
+      <div v-if="!strokes.length" class="paper-empty" @click="showHelp=true"><span><DoodleLogo /></span><b>在这里，让想象铺开</b><small>单指绘画 · 双指移动与缩放 · 每个人都有自己的视角</small></div>
+      <div class="view-controls"><button class="gl-action" aria-label="缩小" @click="zoomAt(1/1.25)"><UiIcon name="minus" /></button><span>{{ zoomLabel }}</span><button class="gl-action" aria-label="放大" @click="zoomAt(1.25)"><UiIcon name="plus" /></button><button class="gl-action origin-button" @click="resetView"><UiIcon name="target" />回到原点</button></div>
       <div class="paper-corner">{{ Math.round(-camera.x/camera.zoom) }}, {{ Math.round(-camera.y/camera.zoom) }}</div>
     </div>
-    <footer class="doodle-footer"><span><i></i> {{ strokes.length ? '共同创作中' : '画纸已准备好' }}</span><span>双指移动 / 缩放 · 保留最近 600 笔</span><button @click="showHelp = !showHelp">使用说明 ?</button></footer>
-    <div v-if="showHelp" class="help-overlay" @click.self="showHelp=false"><article><button class="help-close" @click="showHelp=false">×</button><small>MAKE A MARK</small><h2>一起画，<em>一起玩。</em></h2><p>单指或鼠标绘画；双指拖动和捏合缩放。选择移动工具后，单指也可以拖动画布。电脑可按住空格拖动，滚轮平移，Ctrl/⌘ + 滚轮缩放。视角只影响自己，回到原点可找到朋友的第一笔。每个人的笔画会实时同步给房间里的朋友，新加入的人也会收到当前画布。</p><p>工具栏可切换圆头笔、铅笔、马克笔、荧光笔、喷枪、霓虹笔和蜡笔。选颜色与粗细；橡皮擦会擦掉经过的画迹。撤销仅撤回自己的最近一笔，清空会清除所有人的画布。</p><p>用 <kbd>⌘/Ctrl Z</kbd> 撤销，<kbd>Shift ⌘/Ctrl Z</kbd> 重做。保存视野会导出当前看到的区域。</p><button class="help-done" @click="showHelp=false">开始涂鸦 ↗</button></article></div>
+    <footer class="doodle-footer"><span><i></i> {{ strokes.length ? '共同创作中' : '画纸已准备好' }}</span><span>双指移动 / 缩放 · 保留最近 600 笔</span><button class="gl-action" @click="showHelp = !showHelp"><UiIcon name="help" />使用说明</button></footer>
+    <div v-if="showHelp" class="help-overlay" @click.self="showHelp=false"><article><button class="gl-action help-close" aria-label="关闭说明" @click="showHelp=false"><UiIcon name="close" /></button><small>MAKE A MARK</small><h2>一起画，<em>一起玩。</em></h2><p>单指或鼠标绘画；双指拖动和捏合缩放。选择移动工具后，单指也可以拖动画布。电脑可按住空格拖动，滚轮平移，Ctrl/⌘ + 滚轮缩放。视角只影响自己，回到原点可找到朋友的第一笔。每个人的笔画会实时同步给房间里的朋友，新加入的人也会收到当前画布。</p><p>工具栏可切换圆头笔、铅笔、马克笔、荧光笔、喷枪、霓虹笔和蜡笔。选颜色与粗细；橡皮擦会擦掉经过的画迹。撤销仅撤回自己的最近一笔，清空会清除所有人的画布。</p><p>用 <kbd>⌘/Ctrl Z</kbd> 撤销，<kbd>Shift ⌘/Ctrl Z</kbd> 重做。保存视野会导出当前看到的区域。</p><button class="gl-action help-done" @click="showHelp=false"><UiIcon name="play" />开始涂鸦</button></article></div>
   </section>
 </template>

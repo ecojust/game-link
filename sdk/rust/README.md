@@ -37,3 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `RoomClient::poll_signals_once` yields signals and refreshes members; pass each signal to `PeerMesh::handle_signal` and call `sync_members` to discover later joiners. `PeerMesh::subscribe_messages` emits remote messages with `transport = "p2p"`. The optional `RoomClient::send_relay` method uses the server's queued `game_relay` signal and should be treated as server forwarding, not TURN.
 
 Build with `cargo check` from this directory. The first build downloads `webrtc-rs` and its native Rust dependencies.
+
+## 1.2 协议升级
+
+服务端和 SDK 必须同步升级。创建/加入返回的 resume_token 用作成员操作的 auth_token。收信采用最长 15 秒长轮询，请求超时 20 秒；成员列表随轮询更新。信令按 UUID 去重，成功处理后通过下一轮 poll 的 ack_ids 确认删除；断网未收到的消息会重发，60 秒后过期。每房间人数上限 4。JS/Godot 默认关闭单独定时刷新房间，显式刷新仍保留。服务重启清空内存房间。
+
+PeerMesh::handle_signal 成功后自动调用 acknowledge_signal。自行处理 poll_signals_once 返回值时，成功处理后调用 RoomClient::acknowledge_signal(&signal.id)，并去重；仅收到消息不能确认。

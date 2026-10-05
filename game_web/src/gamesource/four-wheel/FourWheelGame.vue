@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from "../shared/UiIcon.vue"
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { GameLinkClient, GameLinkMember, GameLinkMessage, GameLinkRoom } from '../../../../sdk/js/gamelink.js'
 import { BattleAudio } from '../shared/audio'
@@ -6,10 +7,14 @@ import { BattleRenderer } from './renderer'
 import { BattleSimulation, createWorld, syncDrivers, idleInput, normalizeInput, makeMap, STAGES } from './simulation'
 import type { Input, Mode, World } from './simulation'
 import '../shared/battle.css'
+import RoomInviteButton from '../shared/RoomInviteButton.vue'
 
 const props = defineProps<{ client: GameLinkClient; room: GameLinkRoom; self: GameLinkMember; members: GameLinkMember[]; peerStates: Record<string, string>; localIce: string; remoteIce: string; connectionLabel: string }>()
 defineEmits<{ leave: [] }>()
 const canvas = ref<HTMLCanvasElement | null>(null)
+const driveStick = ref<HTMLElement | null>(null)
+const stickVector = ref({ x: 0, z: 0 })
+let stickPointerId: number | null = null
 const world = shallowRef(createWorld(props.members))
 const hud = shallowRef(structuredClone(world.value))
 const me = computed(() => hud.value.cars.find(c => c.id === props.self.id))
@@ -44,7 +49,7 @@ function tone(frequency: number, duration = 0.08) { soundtrack.effect(frequency,
 function currentInput(): Input {
   if (mutedOnBlur) return { ...idleInput(), brake: true }
   const keys = new Set([...pressed, ...pointers.values()])
-  return { x: Number(keys.has('d') || keys.has('arrowright')) - Number(keys.has('a') || keys.has('arrowleft')), z: Number(keys.has('s') || keys.has('arrowdown')) - Number(keys.has('w') || keys.has('arrowup')), gas: keys.has('j') || keys.has(' '), brake: keys.has('k') || keys.has('x') }
+  return { x: stickPointerId !== null ? stickVector.value.x : Number(keys.has('d') || keys.has('arrowright')) - Number(keys.has('a') || keys.has('arrowleft')), z: stickPointerId !== null ? stickVector.value.z : Number(keys.has('s') || keys.has('arrowdown')) - Number(keys.has('w') || keys.has('arrowup')), gas: keys.has('j') || keys.has(' '), brake: keys.has('k') || keys.has('x') }
 }
 function sendInput(force = false) {
   const input = currentInput(), signature = JSON.stringify(input)
@@ -155,12 +160,37 @@ function pointerUp(event: PointerEvent) {
   if (!pointers.delete(event.pointerId)) return
   sendInput()
 }
+function updateDriveStick(event: PointerEvent) {
+  const element = driveStick.value
+  if (!element) return
+  const bounds = element.getBoundingClientRect()
+  const radius = Math.min(bounds.width, bounds.height) * 0.34
+  let x = (event.clientX - bounds.left - bounds.width / 2) / radius
+  let z = (event.clientY - bounds.top - bounds.height / 2) / radius
+  const distance = Math.hypot(x, z)
+  if (distance > 1) { x /= distance; z /= distance }
+  stickVector.value = { x, z }
+}
+function driveStickDown(event: PointerEvent) {
+  unlockAudio()
+  driveStick.value?.setPointerCapture(event.pointerId)
+  stickPointerId = event.pointerId; mutedOnBlur = false
+  updateDriveStick(event); sendInput()
+}
+function driveStickMove(event: PointerEvent) {
+  if (event.pointerId !== stickPointerId) return
+  updateDriveStick(event); sendInput()
+}
+function driveStickUp(event: PointerEvent) {
+  if (event.pointerId !== stickPointerId) return
+  stickPointerId = null; stickVector.value = { x: 0, z: 0 }; sendInput()
+}
 function releasePointers() {
-  if (!pointers.size) return
-  pointers.clear(); sendInput(true)
+  if (!pointers.size && stickPointerId === null) return
+  pointers.clear(); stickPointerId = null; stickVector.value = { x: 0, z: 0 }; sendInput(true)
 }
 function preventContextMenu(event: MouseEvent) { if ((event.target as HTMLElement)?.closest('.fc-controller')) event.preventDefault() }
-function blur() { pressed.clear(); pointers.clear(); mutedOnBlur = true; sendInput(true) }
+function blur() { pressed.clear(); pointers.clear(); stickPointerId = null; stickVector.value = { x: 0, z: 0 }; mutedOnBlur = true; sendInput(true) }
 function focus() { mutedOnBlur = false; sendInput() }
 function tick() {
   const now = performance.now(), dt = Math.min((now - previous) / 1000, 0.2)
@@ -216,7 +246,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="fc-game" aria-label="激斗四驱车 FC 冲撞战场">
     <header class="fc-banner">
-      <button class="fc-room-tag" :title="`房间号 ${room.code}`" @click="help = !help" :aria-expanded="help" aria-controls="fc-menu">{{ room.code }} <span>☰</span></button>
+      <button class="gl-action fc-room-tag" :title="`房间号 ${room.code}`" @click="help = !help" :aria-expanded="help" aria-controls="fc-menu">{{ room.code }} <UiIcon name="menu" /></button>
       <span>关卡 <b>{{ hud.stage }}</b></span><span>生命 <b :class="{ 'fc-low-life': (me?.hp || 0) < 30 }">{{ Math.ceil(me?.hp || 0) }}</b></span>
       <span>{{ hud.mode === 'coop' ? '敌车' : '击破' }} <b>{{ hud.mode === 'coop' ? Math.max(0, hud.goal - hud.kills) : `${me?.kills || 0}/${hud.goal}` }}</b></span>
       <span class="fc-banner-score">得分 <b>{{ me?.score || 0 }}</b></span><span>{{ members.length }} 人</span>
@@ -227,18 +257,18 @@ onBeforeUnmount(() => {
       <div class="fc-viewport">
         <div v-if="connectionLabel !== 'P2P 直连' && members.length > 1" class="network-recovery" role="status">{{ connectionLabel }} · 自动重试中，断线车辆已停止输入</div>
         <canvas ref="canvas" tabindex="0" class="fc-canvas" aria-label="四驱车战场，方向键或 WASD 转向，J 或空格加速，K 刹车"></canvas>
-        <div v-if="renderError" class="fc-cover"><strong>画面未能启动</strong><p>{{ renderError }}</p><button @click="$emit('leave')">返回大厅</button></div>
-        <div v-else-if="hud.phase !== 'playing'" class="fc-cover"><small>{{ hud.phase === 'over' ? 'GAME OVER' : hud.phase === 'complete' ? 'ALL CLEAR' : 'STAGE CLEAR' }}</small><strong>{{ hud.phase === 'over' ? '四驱车已损坏' : hud.mode === 'versus' ? `${hud.winner} 获胜` : hud.phase === 'complete' ? '八个战场，全部突破！' : '本关敌车已清除' }}</strong><p>{{ hud.phase === 'over' ? '按继续重新挑战当前关卡。' : '车头攻击，保护侧面。下一场继续冲撞！' }}</p><button @click="restart(hud.mode, hud.phase === 'clear' && hud.mode === 'coop')">{{ hud.phase === 'clear' && hud.mode === 'coop' ? '进入下一关' : '继续游戏' }}</button><p>所有玩家状态会通过 P2P 同步。</p><button class="fc-secondary" @click="$emit('leave')">回到游戏库</button></div>
+        <div v-if="renderError" class="fc-cover"><strong>画面未能启动</strong><p>{{ renderError }}</p><button class="gl-action" @click="$emit('leave')">返回大厅</button></div>
+        <div v-else-if="hud.phase !== 'playing'" class="fc-cover"><small>{{ hud.phase === 'over' ? 'GAME OVER' : hud.phase === 'complete' ? 'ALL CLEAR' : 'STAGE CLEAR' }}</small><strong>{{ hud.phase === 'over' ? '四驱车已损坏' : hud.mode === 'versus' ? `${hud.winner} 获胜` : hud.phase === 'complete' ? '八个战场，全部突破！' : '本关敌车已清除' }}</strong><p>{{ hud.phase === 'over' ? '按继续重新挑战当前关卡。' : '车头攻击，保护侧面。下一场继续冲撞！' }}</p><button class="gl-action" @click="restart(hud.mode, hud.phase === 'clear' && hud.mode === 'coop')">{{ hud.phase === 'clear' && hud.mode === 'coop' ? '进入下一关' : '继续游戏' }}</button><p>所有玩家状态会通过 P2P 同步。</p><button class="gl-action fc-secondary" @click="$emit('leave')">回到游戏库</button></div>
         <div v-else-if="me && me.hp <= 0" class="fc-respawn">车辆维修中 · {{ Math.max(1, Math.ceil(me.dead)) }} 秒后归队</div>
       </div>
       <div class="fc-controller" @contextmenu.prevent>
-        <div class="fc-dpad" aria-label="方向控制"><button class="fc-up" aria-label="向上行驶" @pointerdown.prevent="pointerDown('w', $event)" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp">▲</button><button class="fc-left" aria-label="向左行驶" @pointerdown.prevent="pointerDown('a', $event)" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp">◀</button><span>✚</span><button class="fc-right" aria-label="向右行驶" @pointerdown.prevent="pointerDown('d', $event)" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp">▶</button><button class="fc-down" aria-label="向下行驶" @pointerdown.prevent="pointerDown('s', $event)" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp">▼</button></div>
+        <div ref="driveStick" class="fc-stick" role="application" aria-label="四驱车方向摇杆" @pointerdown.prevent="driveStickDown" @pointermove.prevent="driveStickMove" @pointerup="driveStickUp" @pointercancel="driveStickUp" @lostpointercapture="driveStickUp"><div class="fc-stick-pad"><span class="fc-stick-crosshair"/><span class="fc-stick-thumb" :style="{ transform: `translate(${stickVector.x * 30}px, ${stickVector.z * 30}px)` }"/></div><small>方向</small></div>
         <div class="fc-ab"><div><button aria-label="B 刹车" @pointerdown.prevent="pointerDown('k', $event)" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp">B</button></div><div><button aria-label="A 加速" @pointerdown.prevent="pointerDown('j', $event)" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp">A</button></div></div>
       </div>
     </div>
     <aside v-if="help" id="fc-menu" class="fc-menu" aria-label="房间设置">
-    <div class="fc-menu-heading"><strong>激斗四驱车 · {{ STAGES[hud.stage - 1] }}</strong><button @click="help = false" aria-label="关闭菜单">×</button></div>
-    <div class="fc-menu-actions"><button @click="toggleSound" :aria-pressed="sound">{{ sound ? '关闭音乐与音效' : '开启音乐与音效' }}</button><button @click="$emit('leave')">离开房间</button></div>
+    <div class="fc-menu-heading"><strong>激斗四驱车 · {{ STAGES[hud.stage - 1] }}</strong><button class="gl-action" @click="help = false" aria-label="关闭菜单"><UiIcon name="close" /></button></div>
+    <div class="fc-menu-actions"><button class="gl-action" @click="toggleSound" :aria-pressed="sound"><UiIcon :name="sound ? 'volume' : 'muted'" />{{ sound ? '关闭音乐与音效' : '开启音乐与音效' }}</button><RoomInviteButton game-id="fc-mini-4wd" :room-code="room.code" :member-count="members.length" :max-members="4"/><button class="gl-action" @click="$emit('leave')"><UiIcon name="exit" />离开房间</button></div>
     <label class="fc-volume">音量 {{ volume }}%<input v-model.number="volume" type="range" min="0" max="100" aria-label="音乐与音效音量" @input="changeVolume" /></label><p class="fc-ice">所有玩家平等参与；各端本地模拟并通过 P2P 同步。</p><p class="fc-ice">首次按方向键或 A/B 键启动音乐。</p>
     <div class="fc-session-bar"><label>车辆<select v-model.number="selectedCar" @change="selectCar"><option :value="0">回旋镖 · 均衡</option><option :value="1">飞狐 · 速度</option><option :value="2">战龙 · 稳重</option></select></label><label>模式<select :value="hud.mode" @change="changeMode"><option value="coop">合作闯关</option><option value="versus">玩家对战 · 10 次击破</option></select></label><span>{{ connectionLabel }}<small v-if="snapshotAge >= 3"> · 正在重新同步</small></span></div>
     <div class="fc-roster"><span v-for="car in roster" :key="car.id"><i :style="{ background: car.paint }"></i><b>{{ car.name }}</b><small>{{ car.id === self.id ? '你' : peerStates[car.id] === 'connected' ? 'P2P 直连' : peerStates[car.id] === 'reconnecting' ? 'P2P 重连中' : '连接中' }}</small><em>{{ Math.ceil(car.hp) }} HP · {{ car.kills }} 击破</em></span></div>

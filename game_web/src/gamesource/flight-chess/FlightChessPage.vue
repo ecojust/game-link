@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import UiIcon from "../shared/UiIcon.vue"
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { GameLinkClient } from '../../../../sdk/js/gamelink.js'
 import type { GameLinkMember, GameLinkMessage, GameLinkRoom } from '../../../../sdk/js/gamelink.js'
 import FlightBoard from './FlightBoard.vue'
+import RoomInviteButton from '../shared/RoomInviteButton.vue'
 
 type Phase = 'waiting' | 'roll' | 'move' | 'done'
 type Player = { id: string; name: string; color: string; planes: number[] }
@@ -151,9 +153,17 @@ onMounted(async () => {
     })
     session.on('error', reason => { error.value = reason.message })
     session.on('room-closed', () => { ready.value = false; error.value = '房间已关闭，请回到大厅重新加入。' })
+    const inviteCode = new URLSearchParams(location.search).get('room')?.trim().toUpperCase()
+    if (inviteCode) {
+      const response = await fetch(`${session.serverUrl}/v1/rooms`)
+      if (response.ok) {
+        const roomList = await response.json() as Array<{ code: string; game_id: string; member_count: number; max_members: number }>
+        const currentRoom = roomList.find(candidate => candidate.code.toUpperCase() === inviteCode)
+        if (currentRoom && currentRoom.game_id === 'gamelink-flight-chess' && currentRoom.member_count >= Math.min(currentRoom.max_members, 4)) throw new Error('飞行棋房间已满，最多 4 位玩家。')
+      }
+    }
     const joined = await session.joinFromLocation()
     room.value = joined.room; self.value = joined.self_member; members.value = joined.room.members
-    if (members.value.length > 4) { error.value = '飞行棋房间最多 4 位玩家。'; await session.leave(); return }
     state.value = { ...freshState(), players: [...members.value].sort((a,b) => a.id.localeCompare(b.id)).slice(0,4).map((member, index) => ({ id: member.id, name: member.name, color: COLORS[index]!, planes: [-1,-1,-1,-1] })), notice: members.value.length >= 2 ? '飞行员到齐，等待开局' : '等待第二位玩家加入' }
     ready.value = true
     for (const [id,status] of session.peerStates) { peers.value[id] = status; if (status === 'connected') session.send('ludo-request', {}, { target:id, reliability:'reliable' }) }
@@ -165,10 +175,11 @@ onBeforeUnmount(() => { window.clearTimeout(rollTimer); client.value?.dispose() 
 <template>
   <main class="flight-game board-first">
     <header class="flight-header">
-      <a href="/" class="flight-brand"><span class="brand-plane">✈</span><b>飞行棋</b></a>
+      <a href="/" class="flight-brand"><span class="brand-plane"><UiIcon name="plane" /></span><b>飞行棋</b></a>
       <div class="flight-room"><small>房间</small><b>{{ room?.code || '练习' }}</b></div>
       <span class="compact-network" role="status">{{ preview ? '单人练习' : `${connected}/${state.players.length} 已连接` }}</span>
-      <button class="flight-exit" @click="leaveRoom">退出 ↗</button>
+      <RoomInviteButton v-if="room && !preview" variant="flight" game-id="gamelink-flight-chess" :room-code="room.code" :member-count="members.length" :max-members="4" />
+      <button class="gl-action flight-exit" @click="leaveRoom"><UiIcon name="exit" />退出</button>
     </header>
     <section v-if="ready" class="board-stage">
       <div class="board-turn" aria-live="polite"><b>{{ turnTitle }}</b><span>{{ !allConnected ? '等待连接恢复…' : state.phase === 'waiting' ? '2 人即可开始 · 最多 4 人' : state.notice }}</span></div>
@@ -176,8 +187,8 @@ onBeforeUnmount(() => { window.clearTimeout(rollTimer); client.value?.dispose() 
       <div class="board-arena">
         <FlightBoard :state="state" :self-id="localId" @move="movePlane" />
         <div class="center-control">
-          <button v-if="state.phase === 'waiting'" class="center-dice start-dice" :disabled="!canStart" @click="begin"><span>✈</span><small>{{ canStart ? `${state.players.length} 人开始` : state.players.length < 2 ? '等待朋友' : '连接中' }}</small></button>
-          <button v-else class="center-dice" :class="{ rolling, 'is-mine': myTurn && state.phase === 'roll' }" :disabled="!canRoll" :aria-label="canRoll ? '掷骰子' : state.phase === 'move' ? '请选择飞机' : '等待回合'" @click="roll"><span>{{ state.dice ? ['','⚀','⚁','⚂','⚃','⚄','⚅'][state.dice] : '⚄' }}</span><small>{{ rolling ? '掷骰中' : state.phase === 'done' ? '已结束' : !allConnected ? '连接中' : myTurn ? state.phase === 'move' ? '选择飞机' : '掷骰子' : '等待对手' }}</small></button>
+          <button v-if="state.phase === 'waiting'" class="center-dice start-dice" :disabled="!canStart" @click="begin"><UiIcon name="plane" /><small>{{ canStart ? `${state.players.length} 人开始` : state.players.length < 2 ? '等待朋友' : '连接中' }}</small></button>
+          <button v-else class="center-dice" :class="{ rolling, 'is-mine': myTurn && state.phase === 'roll' }" :disabled="!canRoll" :aria-label="canRoll ? '掷骰子' : state.phase === 'move' ? '请选择飞机' : '等待回合'" @click="roll"><UiIcon name="dice" :value="state.dice || 5" /><small>{{ rolling ? '掷骰中' : state.phase === 'done' ? '已结束' : !allConnected ? '连接中' : myTurn ? state.phase === 'move' ? '选择飞机' : '掷骰子' : '等待对手' }}</small></button>
         </div>
       </div>
       <div class="players-strip" aria-label="玩家状态">

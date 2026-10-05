@@ -3,40 +3,99 @@
     "id": "tank-arena",
     "title": "多人坦克竞技场",
     "description": "占领掩体，和队友在战场里正面对决。",
-    "players": "1–16 人",
+    "max_players": 4,
     "tag": "即时对战",
     "theme": "tank",
     "glyph": "T",
-    "entry_url": "/tank/index.html"
+    "entry_url": "/tank/index.html",
+    "cover_url": "/covers/tank-card.jpg"
   },
   {
     "id": "fc-mini-4wd",
     "title": "激斗四驱车",
     "description": "车头冲撞、击退敌车，重返 FC 的俯视战场。",
-    "players": "1–16 人",
+    "max_players": 4,
     "tag": "FC 冲撞对战",
     "theme": "racer",
     "glyph": "4WD",
-    "entry_url": "/four-wheel/index.html"
+    "entry_url": "/four-wheel/index.html",
+    "cover_url": "/covers/racer-card.jpg"
   },
   {
     "id": "gamelink-doodle",
     "title": "一起涂鸦",
-    "description": "和朋友在同一张画布上即兴创作，画笔实时同步。",
-    "players": "1–16 人",
+    "description": "每轮随机一个绘画主题，同房玩家一起实时创作。",
+    "max_players": 4,
     "tag": "多人共创",
     "theme": "doodle",
     "glyph": "✳",
-    "entry_url": "/doodle/index.html"
+    "entry_url": "/doodle/index.html",
+    "cover_url": "/covers/doodle-card.jpg"
   },
   {
     "id": "gamelink-flight-chess",
     "title": "飞行棋",
     "description": "掷出六点起飞，绕场一周，把四架飞机安全送回终点。",
-    "players": "2–4 人",
+    "max_players": 4,
     "tag": "多人回合棋",
     "theme": "flight",
     "glyph": "✈",
-    "entry_url": "/flight-chess/index.html"
+    "entry_url": "/flight-chess/index.html",
+    "cover_url": "/covers/flight-card.jpg"
+  },
+  {
+    "id": "gamelink-whiteboard",
+    "title": "一起白板",
+    "description": "和朋友在无限画布上绘图、画流程、贴便签，灵感实时同步。",
+    "max_players": 4,
+    "tag": "多人协作白板",
+    "theme": "whiteboard",
+    "glyph": "▧",
+    "entry_url": "/whiteboard/index.html",
+    "cover_url": "/covers/whiteboard-card.jpg"
+  },
+  {
+    "id": "gamelink-street-racer",
+    "title": "极品飞车 · 午夜街头",
+    "description": "横握手机倾斜转向，在霓虹城市赛道释放氮气，和朋友一起追逐速度。",
+    "max_players": 4,
+    "tag": "3D 街头竞速",
+    "theme": "street",
+    "glyph": "GT",
+    "entry_url": "/street-racer/index.html",
+    "cover_url": "/covers/street-midnight-card.jpg"
+  },
+  {
+    "id": "gamelink-poetry",
+    "title": "诗词大会",
+    "description": "补全诗句，手写交卷。等大家落笔，再一起揭晓答案。",
+    "max_players": 4,
+    "tag": "手写诗词填空",
+    "theme": "poetry",
+    "glyph": "诗",
+    "entry_url": "/poetry/index.html",
+    "cover_url": "/covers/poetry-moonlit-card.jpg"
+  },
+  {
+    "id": "gamelink-watch-tv",
+    "title": "小小小剧院",
+    "description": "挑一部好片，坐上四人沙发。播放、暂停和进度一起同步。",
+    "max_players": 4,
+    "tag": "多人同步观影",
+    "theme": "television",
+    "glyph": "TV",
+    "entry_url": "/watch-tv/index.html",
+    "cover_url": "/covers/little-theater-card.jpg"
+  },
+  {
+    "id": "gamelink-wild-hearth",
+    "title": "狂野炉石",
+    "description": "两人即可开始，最多四位英雄混战。召唤随从、施放法术，成为最后的幸存者。",
+    "max_players": 4,
+    "tag": "2–4 人卡牌混战",
+    "theme": "hearth",
+    "glyph": "WH",
+    "entry_url": "/wild-hearth/index.html",
+    "cover_url": "/covers/wild-hearth-tavern-card.jpg"
   }
 ]

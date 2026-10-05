@@ -1,0 +1,35 @@
+{
+  "voice": "Eddy (中文（中国大陆）)",
+  "scenes": [
+    {
+      "scene": 1,
+      "source_duration": 4.014331,
+      "tempo": 1
+    },
+    {
+      "scene": 2,
+      "source_duration": 4.297778,
+      "tempo": 1
+    },
+    {
+      "scene": 3,
+      "source_duration": 5.006531,
+      "tempo": 1
+    },
+    {
+      "scene": 4,
+      "source_duration": 4.841769,
+      "tempo": 1
+    },
+    {
+      "scene": 5,
+      "source_duration": 4.937596,
+      "tempo": 1
+    },
+    {
+      "scene": 6,
+      "source_duration": 3.76966,
+      "tempo": 1
+    }
+  ]
+}

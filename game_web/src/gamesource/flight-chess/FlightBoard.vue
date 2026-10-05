@@ -4,7 +4,7 @@ type Player = { id:string; name:string; color:string; planes:number[] }
 type State = { players:Player[]; turn:number; phase:string; dice:number }
 const props = defineProps<{ state:State; selfId:string }>()
 defineEmits<{ move:[plane:number] }>()
-const colors: Record<string,string> = { red:'#e75b4f', blue:'#4784c5', yellow:'#eab844', green:'#52a77a' }
+const colors: Record<string,string> = { red:'#cb716c', blue:'#638dbc', yellow:'#ba963f', green:'#669a81' }
 const order = ['red','blue','yellow','green']
 const path = Array.from({length:52},(_,index)=> {
   const angle = (-135 + index*360/52)*Math.PI/180
@@ -43,25 +43,22 @@ function offset(player:Player,plane:number) {
       <linearGradient id="board-surface" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#edf2fa"/></linearGradient>
       <symbol id="aircraft" viewBox="-18 -20 36 40"><path d="M0 -18 C3 -18 4 -14 4 -10 L4 -4 L16 4 L16 8 L4 4 L3 12 L8 16 L8 18 L0 16 L-8 18 L-8 16 L-3 12 L-4 4 L-16 8 L-16 4 L-4 -4 L-4 -10 C-4 -14 -3 -18 0 -18Z" fill="currentColor" stroke="white" stroke-width="1.4" stroke-linejoin="round"/><path d="M-2 -11 Q0 -15 2 -11 L2 -6 L-2 -6Z" fill="#223e60" opacity=".65"/><path d="M0 -3 L0 12" stroke="white" stroke-opacity=".5" stroke-width="1.2"/></symbol>
       <pattern id="board-grain" width="18" height="18" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r=".7" fill="#274136" opacity=".07"/></pattern><filter id="plane-shadow" x="-60%" y="-60%" width="220%" height="220%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#13221c" flood-opacity=".22"/></filter></defs>
-    <rect x="8" y="8" width="584" height="584" rx="18" fill="url(#board-surface)"/><rect x="8" y="8" width="584" height="584" rx="18" fill="url(#board-grain)"/>
-    <rect x="14" y="14" width="572" height="572" rx="16" fill="none" stroke="#dbe4f0" stroke-width="1.5"/><circle cx="300" cy="300" r="193" fill="none" stroke="#e0e7f1" stroke-width="1"/><circle cx="300" cy="300" r="239" fill="none" stroke="#e0e7f1" stroke-width="1" stroke-dasharray="3 7"/>
-    <circle cx="300" cy="300" r="216" fill="none" stroke="#e5ebf4" stroke-width="36"/>
+    <rect x="8" y="8" width="584" height="584" rx="18" fill="url(#board-surface)"/>
+    <rect x="14" y="14" width="572" height="572" rx="16" fill="none" stroke="#dbe4f0" stroke-width="1.5"/><circle cx="300" cy="300" r="193" fill="none" stroke="#e0e7f1" stroke-width="1"/><circle cx="300" cy="300" r="239" fill="none" stroke="#e8edf3" stroke-width="1"/>
+    <circle cx="300" cy="300" r="216" fill="none" stroke="#edf1f6" stroke-width="32"/>
     <g v-for="(color,index) in order" :key="color" :opacity="seat(color) ? 1 : .48">
       <rect :x="bases[index]!.x" :y="bases[index]!.y" width="130" height="130" rx="25" :fill="colors[color]" opacity=".12"/>
-      <rect :x="bases[index]!.x" :y="bases[index]!.y" width="130" height="130" rx="25" fill="none" :stroke="colors[color]" stroke-width="2"/>
+      <rect :x="bases[index]!.x" :y="bases[index]!.y" width="130" height="130" rx="25" fill="none" :stroke="colors[color]" stroke-width="1" stroke-opacity=".35"/>
       <circle v-for="(spot,i) in homes[color]" :key="i" :cx="spot.x" :cy="spot.y" r="19" fill="white" :stroke="colors[color]" stroke-opacity=".22"/>
-      <text :x="bases[index]!.x+65" :y="bases[index]!.y+117" text-anchor="middle" :fill="colors[color]" font-size="10" font-weight="700">{{ seat(color)?.name.slice(0,9) || '空位 · 无需等满' }}</text>
+      <text :x="bases[index]!.x+65" :y="bases[index]!.y+117" text-anchor="middle" :fill="colors[color]" font-size="10" font-weight="700">{{ seat(color)?.name.slice(0,9) || '空位' }}</text>
     </g>
     <g v-for="(point,index) in path" :key="index" :transform="`translate(${point.x} ${point.y}) rotate(${-45+index*360/52})`">
-      <rect x="-11.5" y="-12" width="23" height="29" rx="6" fill="#a8b9d0" opacity=".48"/>
-      <rect x="-11.5" y="-15" width="23" height="29" rx="6" fill="white" stroke="#ccd7e5" stroke-width=".7"/>
-      <rect x="-9" y="-12.5" width="18" height="24" rx="4" :fill="colors[order[index%4]!]"/>
-      <rect x="-9" y="-12.5" width="18" height="24" rx="4" fill="url(#tile-glaze)"/>
-      <path v-if="[0,8,13,21,26,34,39,47].includes(index)" d="M0 -7 L2 -2 L7 -2 L3 1 L4 6 L0 3 L-4 6 L-3 1 L-7 -2 L-2 -2Z" fill="white" stroke="#ffffff88" stroke-width=".7"/>
-      <path v-else d="M-3 -1 L0 2 L3 -1" fill="none" stroke="white" stroke-opacity=".65" stroke-width="1.5" stroke-linecap="round"/>
+      <rect x="-10" y="-10" width="20" height="20" rx="5" fill="white"/>
+      <rect x="-10" y="-10" width="20" height="20" rx="5" :fill="colors[order[index%4]!]" fill-opacity=".22" :stroke="colors[order[index%4]!]" stroke-opacity=".35" stroke-width=".8"/>
+      <path v-if="[0,8,13,21,26,34,39,47].includes(index)" d="M0 -6 L2 -2 L6 -2 L3 1 L4 5 L0 3 L-4 5 L-3 1 L-6 -2 L-2 -2Z" :fill="colors[order[index%4]!]"/>
     </g>
     <g v-for="color in order" :key="`lane-${color}`"><path :d="`M ${lanes[color]![0]!.x} ${lanes[color]![0]!.y} L 300 300`" :stroke="colors[color]" stroke-width="24" opacity=".12"/>
-      <circle v-for="(spot,index) in lanes[color]" :key="index" :cx="spot.x" :cy="spot.y" r="9" :fill="colors[color]" opacity=".7" stroke="white" stroke-width="2"/>
+      <circle v-for="(spot,index) in lanes[color]" :key="index" :cx="spot.x" :cy="spot.y" r="9" :fill="colors[color]" opacity=".45" stroke="white" stroke-width="2"/>
     </g>
     <circle cx="300" cy="300" r="47" fill="white" stroke="#e0e7f1" stroke-width="2"/>
     <path d="M300 259 L341 300 L300 341 L259 300 Z" fill="#edf2fb"/>

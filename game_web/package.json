@@ -1,7 +1,7 @@
 {
   "name": "gamelink-tank-arena-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "test:four-wheel": "node scripts/test-four-wheel.mjs",
@@ -12,10 +12,16 @@
     "predev": "node scripts/build-games.mjs --development"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
+    "hls.js": "^1.7.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "three": "^0.186.1",
     "vue": "^3.5.0"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-vue": "^6.0.0",
     "typescript": "~5.9.0",

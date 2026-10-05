@@ -67,7 +67,7 @@ client.on('peer-ready', ({ peerId, recovered, generation }) => {
 
 SDK 不理解游戏状态，完整快照的授权、版本检查和应用由游戏实现。不要重放断线期间的攻击等一次性操作。坦克会暂停战斗并交换玩家状态和准备状态；四驱车停止断线玩家输入，恢复后从任一在线玩家接收世界快照并重置输入序号检查。游戏逻辑不依赖某位玩家持续处于前台。
 
-HTTP 请求默认 8 秒超时，可用 `requestTimeoutMs` 配置，避免信令网络黑洞永久占用轮询。超过服务端成员保留时间后，需要重新加入房间。
+普通 HTTP 请求默认 8 秒超时，长轮询至少 20 秒；可用 `requestTimeoutMs` 配置，避免信令网络黑洞永久占用轮询。超过服务端成员保留时间后，需要重新加入房间。
 
 ### 故障测试
 
@@ -88,3 +88,19 @@ node sdk/js/tests/browser-network.mjs
 `joinRoom` 返回的 `room.members`、`members` 事件，以及每次 `/signals/poll` 返回的 `members` 都是房间当前其他成员数组；`selfMember` 是本机成员。服务端已有成员汇总和超时清理，无需新增 ICE 汇总接口。成员上的 `endpoint` 是服务端看到的 HTTP 传输端点，不是 ICE 地址。ICE 候选和选中的 ICE 地址由每一对浏览器各自协商，并通过 `peer-state.localIce` / `remoteIce` 提供；它们不是可由服务器准确汇总后供所有客户端复用的公共地址。
 
 JS SDK 已在 `control` DataChannel 上增加内部 P2P ping/pong：默认每 4 秒探测，12 秒没有收到该 peer 的任何 P2P 数据则转为重连状态。`send()` 和 `broadcast()` 只向 SDK 标记为 `connected` 且通道打开的 peer 发游戏数据；其他 peer 触发 `delivery-skipped`，状态恢复后游戏通过 `peer-ready` 发送新快照。可用 `peerHeartbeatIntervalMs` 和 `peerTimeoutMs` 配置阈值。该心跳不经过服务器。服务器侧 HTTP 心跳仍独立维护房间成员存在状态。
+
+## 1.2 协议升级
+
+服务端和 SDK 必须同步升级。创建/加入返回的 resume_token 用作成员操作的 auth_token。收信采用最长 15 秒长轮询，请求超时 20 秒；成员列表随轮询更新。信令按 UUID 去重，成功处理后通过下一轮 poll 的 ack_ids 确认删除；断网未收到的消息会重发，60 秒后过期。每房间人数上限 4。JS/Godot 默认关闭单独定时刷新房间，显式刷新仍保留。服务重启清空内存房间。
+
+### STUN 诊断
+
+SDK 监听浏览器 `icecandidateerror`，将失败服务 URL、浏览器错误码、原因和对端 ID 通过 `stun-status` 事件返回。收到 `srflx` 公网候选时状态为 `available`；收集结束后，没有公网候选且所有配置服务都有失败记录时为 `failed`，否则为 `unconfirmed`（不能仅根据缺少公网候选断言服务不可达）。
+
+失败同时通过现有 `error` 事件显示中文提示，所有游戏无需另接错误 UI。错误名称 `GameLinkStunError`，`code` 分别为 `STUN_SERVER_ERROR`、`STUN_ALL_FAILED`、`STUN_NO_PUBLIC_CANDIDATE`、`STUN_TIMEOUT`。10 秒内无公网候选时提示检测超时（不将超时等同于服务不可达），避免连接重试在浏览器报告错误之前重建连接而长期没有提示。同类同地址提示在 60 秒内去重，避免多对端与持续重试刷屏。失败提示不会中止局域网直连，也不代表某个服务失败就必然无法联机。STUN 请求由玩家浏览器发起，服务端无法替玩家网络判断可达性。不同浏览器的错误事件支持和报告时机可能不同。
+
+### 默认 STUN 地址
+
+参照[国内可访问的 STUN 服务器](https://zhuanlan.zhihu.com/p/1928418712958010287)的地址列表，新增 `stun.miwifi.com:3478`、`stun.antisip.com:3478`、`stun.linphone.org:3478`、`stun.zadarma.com:3478`，保留 Google `stun.l.google.com:19302` 与 Cloudflare `stun.cloudflare.com:3478`，共六个默认服务。浏览器 ICE 会收集这些服务的候选，选择能连通的候选；不是按数组顺序逐个尝试。
+
+文章记录的是作者 2025-07-15 的网络验证结果，不代表当前所有运营商网络都可达。SDK 保留逐地址失败、全部失败和超时诊断；调用者仍可通过 `iceServers` 覆盖默认列表。没有增加 TURN 中继。独立游戏入口与 SDK 导入的缓存参数随文件内容变化，保证发布新配置后浏览器获取新版本。
