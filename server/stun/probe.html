@@ -1,3 +1,43 @@
-<!doctype html><meta charset="utf-8"><title>WebRTC STUN 检测</title><h1>WebRTC STUN 检测</h1><button onclick="probe('stun:111.229.154.132:3478')">检测自建 STUN</button><button onclick="probe('stun:stun.cloudflare.com:3478')">检测 Cloudflare</button><button onclick="probe('stun:stun.l.google.com:19302')">检测 Google</button><pre id="result">等待检测</pre><script>
-async function probe(url){const out=document.getElementById('result');out.textContent='检测中：'+url+'\n';const pc=new RTCPeerConnection({iceServers:[{urls:url}]});let done=false;let count=0;const line=x=>out.textContent+=x+'\n';const finish=()=>{if(done)return;done=true;line('结束，公网 srflx 候选数量：'+count);pc.close()};pc.onicecandidate=e=>{if(e.candidate){line(e.candidate.candidate);if(e.candidate.type==='srflx')count++}else finish()};pc.onicecandidateerror=e=>line('ICE ERROR '+JSON.stringify({url:e.url,errorCode:e.errorCode,errorText:e.errorText}));pc.onicegatheringstatechange=()=>line('gathering: '+pc.iceGatheringState);pc.createDataChannel('probe');await pc.setLocalDescription(await pc.createOffer());setTimeout(finish,45000)}
+<!doctype html><meta charset="utf-8" /><title>WebRTC STUN 检测</title>
+<h1>WebRTC STUN 检测</h1>
+<button onclick="probe('stun:xx.xx.xx.xx:3478')">检测自建 STUN</button
+><button onclick="probe('stun:stun.cloudflare.com:3478')">
+  检测 Cloudflare</button
+><button onclick="probe('stun:stun.l.google.com:19302')">检测 Google</button>
+<pre id="result">等待检测</pre>
+<script>
+  async function probe(url) {
+    const out = document.getElementById("result");
+    out.textContent = "检测中：" + url + "\n";
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: url }] });
+    let done = false;
+    let count = 0;
+    const line = (x) => (out.textContent += x + "\n");
+    const finish = () => {
+      if (done) return;
+      done = true;
+      line("结束，公网 srflx 候选数量：" + count);
+      pc.close();
+    };
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        line(e.candidate.candidate);
+        if (e.candidate.type === "srflx") count++;
+      } else finish();
+    };
+    pc.onicecandidateerror = (e) =>
+      line(
+        "ICE ERROR " +
+          JSON.stringify({
+            url: e.url,
+            errorCode: e.errorCode,
+            errorText: e.errorText,
+          }),
+      );
+    pc.onicegatheringstatechange = () =>
+      line("gathering: " + pc.iceGatheringState);
+    pc.createDataChannel("probe");
+    await pc.setLocalDescription(await pc.createOffer());
+    setTimeout(finish, 45000);
+  }
 </script>

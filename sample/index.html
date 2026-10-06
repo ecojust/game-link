@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GameLink 示例 · 移动方块</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>GameLink 示例</h1>
+    <div class="actions">
+      <button id="logs" type="button">日志</button>
+      <button id="connections" type="button">玩家连接</button>
+      <button id="leave" type="button" hidden>退出房间</button>
+    </div>
+  </header>
+
+  <main>
+    <canvas id="board" width="640" height="640"></canvas>
+
+    <aside>
+      <section id="lobby">
+        <label>昵称 <input id="name" type="text" maxlength="16" autocomplete="off"></label>
+        <button id="create" class="primary" type="button">创建房间</button>
+        <label>房间码 <input id="code" type="text" maxlength="6" placeholder="6 位字符" autocomplete="off" spellcheck="false"></label>
+        <button id="join" type="button">加入房间</button>
+      </section>
+
+      <section id="room" hidden>
+        <p class="code" id="room-code"></p>
+        <ul id="players"></ul>
+      </section>
+
+      <p id="status">输入昵称，创建或加入房间</p>
+      <p class="tip">WASD / 方向键移动</p>
+    </aside>
+  </main>
+
+  <script type="module" src="./game.js"></script>
+</body>
+</html>

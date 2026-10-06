@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate STUN Binding replies over UDP/TCP; --interface is macOS-only."""
 import argparse, json, os, socket, struct, sys
-parser=argparse.ArgumentParser();parser.add_argument('--host',default='111.229.154.132');parser.add_argument('--port',type=int,default=3478);parser.add_argument('--interface');parser.add_argument('--count',type=int,default=3);args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('--host',default='xx.xx.xx.xx');parser.add_argument('--port',type=int,default=3478);parser.add_argument('--interface');parser.add_argument('--count',type=int,default=3);args=parser.parse_args()
 def receive_exact(sock,n):
  data=b''
  while len(data)<n:
