@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1260" viewBox="0 0 1040 1260" font-family="system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#8b96a3"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#ff7a45"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#37c2b8"/>
+    </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#6b7683"/>
+    </marker>
+    <style>
+      .box { fill: #1b2330; stroke: #29323d; stroke-width: 1.5; }
+      .box-accent { fill: #1f2733; stroke: #ff7a45; stroke-width: 1.8; }
+      .title { font-size: 19px; font-weight: 700; fill: #e8ecf1; }
+      .sub { font-size: 12.5px; fill: #8b96a3; }
+      .name { font-size: 15px; font-weight: 700; fill: #e8ecf1; }
+      .desc { font-size: 11.5px; fill: #9aa5b2; }
+      .mono { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; fill: #8b96a3; }
+      .label { font-size: 11.5px; fill: #c9d2dd; }
+      .label-muted { font-size: 11px; fill: #8b96a3; }
+      .head { font-size: 13px; font-weight: 700; fill: #e8ecf1; }
+      .head-sub { font-size: 11px; fill: #8b96a3; }
+      .legend { font-size: 11.5px; fill: #8b96a3; }
+    </style>
+  </defs>
+
+  <rect width="1040" height="1260" fill="#12171d"/>
+
+  <text class="title" x="50" y="58">① 三者关系</text>
+  <text class="sub" x="50" y="82">数据流是单向的：game 每帧推给 sdk，sdk 状态变化推给 ui；ui 只调用 sdk 的方法</text>
+
+  <line x1="676" y1="54" x2="706" y2="54" stroke="#ff7a45" stroke-width="2.5"/>
+  <text class="legend" x="712" y="58">game → sdk</text>
+  <line x1="796" y1="54" x2="826" y2="54" stroke="#37c2b8" stroke-width="2.5"/>
+  <text class="legend" x="832" y="58">sdk → ui 事件</text>
+
+  <rect class="box" x="50" y="110" width="230" height="104" rx="10"/>
+  <text class="name" x="165" y="146" text-anchor="middle">game.js</text>
+  <text class="desc" x="165" y="170" text-anchor="middle">游戏控制 · 模块入口</text>
+  <text class="desc" x="165" y="190" text-anchor="middle">键盘输入 / 游戏循环</text>
+
+  <rect class="box-accent" x="405" y="110" width="230" height="104" rx="10"/>
+  <text class="name" x="520" y="146" text-anchor="middle">sdk.js</text>
+  <text class="desc" x="520" y="170" text-anchor="middle">GameLinkClient 单例</text>
+  <text class="desc" x="520" y="190" text-anchor="middle">房间 · 玩家模型 · 定时发送</text>
+
+  <rect class="box" x="760" y="110" width="230" height="104" rx="10"/>
+  <text class="name" x="875" y="146" text-anchor="middle">ui.js</text>
+  <text class="desc" x="875" y="170" text-anchor="middle">DOM 名单 / 状态 / 画布</text>
+  <text class="desc" x="875" y="190" text-anchor="middle">只订阅 sdk，不碰网络</text>
+
+  <line x1="286" y1="150" x2="399" y2="150" stroke="#ff7a45" stroke-width="1.8" marker-end="url(#arrowOrange)"/>
+  <text class="label" x="342" y="139" text-anchor="middle">setSelfPosition(x, y)</text>
+
+  <line x1="641" y1="142" x2="754" y2="142" stroke="#37c2b8" stroke-width="1.8" marker-end="url(#arrowTeal)"/>
+  <text class="label" x="697" y="131" text-anchor="middle">状态变化事件</text>
+
+  <line x1="754" y1="180" x2="641" y2="180" stroke="#8b96a3" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text class="label" x="697" y="201" text-anchor="middle">按钮调用</text>
+
+  <line x1="520" y1="220" x2="520" y2="292" stroke="#8b96a3" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text class="label-muted" x="532" y="262">包装</text>
+
+  <rect class="box" x="405" y="300" width="230" height="90" rx="10"/>
+  <text class="name" x="520" y="334" text-anchor="middle">GameLinkClient</text>
+  <text class="mono" x="520" y="356" text-anchor="middle">sdk/js/gamelink.js</text>
+  <text class="desc" x="520" y="378" text-anchor="middle">房间 / 信令 / WebRTC</text>
+
+  <rect class="box" x="50" y="300" width="210" height="90" rx="10"/>
+  <text class="desc" x="155" y="334" text-anchor="middle" fill="#e8ecf1">信令服务器 + 其他玩家</text>
+  <text class="mono" x="155" y="356" text-anchor="middle">HTTP /v1 · DataChannel</text>
+  <text class="desc" x="155" y="378" text-anchor="middle">房间上限 4 人</text>
+
+  <line x1="400" y1="345" x2="266" y2="345" stroke="#8b96a3" stroke-width="1.8" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text class="label" x="333" y="333" text-anchor="middle">HTTP 信令 / WebRTC</text>
+
+  <line x1="50" y1="432" x2="990" y2="432" stroke="#29323d" stroke-width="1"/>
+
+  <text class="title" x="50" y="478">② 时序</text>
+  <text class="sub" x="50" y="502">创建房间 → 建立 P2P → 位置同步 → 退出</text>
+
+  <line x1="150" y1="552" x2="150" y2="1210" stroke="#2f3a47" stroke-dasharray="4 5"/>
+  <line x1="400" y1="552" x2="400" y2="1210" stroke="#2f3a47" stroke-dasharray="4 5"/>
+  <line x1="650" y1="552" x2="650" y2="1210" stroke="#2f3a47" stroke-dasharray="4 5"/>
+  <line x1="900" y1="552" x2="900" y2="1210" stroke="#2f3a47" stroke-dasharray="4 5"/>
+
+  <rect class="box" x="70" y="516" width="160" height="36" rx="8"/>
+  <text class="head" x="150" y="533" text-anchor="middle">ui.js</text>
+  <text class="head-sub" x="150" y="547" text-anchor="middle">UI 显示</text>
+
+  <rect class="box" x="320" y="516" width="160" height="36" rx="8"/>
+  <text class="head" x="400" y="533" text-anchor="middle">game.js</text>
+  <text class="head-sub" x="400" y="547" text-anchor="middle">游戏控制</text>
+
+  <rect class="box-accent" x="570" y="516" width="160" height="36" rx="8"/>
+  <text class="head" x="650" y="533" text-anchor="middle">sdk.js</text>
+  <text class="head-sub" x="650" y="547" text-anchor="middle">SDK 单例</text>
+
+  <rect class="box" x="820" y="516" width="160" height="36" rx="8"/>
+  <text class="head" x="900" y="533" text-anchor="middle">服务器 / 对端</text>
+  <text class="head-sub" x="900" y="547" text-anchor="middle">信令 + WebRTC</text>
+
+  <line x1="150" y1="600" x2="644" y2="600" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="397" y="590" text-anchor="middle">enter({ name, mode, code })</text>
+
+  <line x1="650" y1="642" x2="894" y2="642" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="772" y="632" text-anchor="middle">POST /v1/rooms · join</text>
+
+  <line x1="900" y1="684" x2="656" y2="684" stroke="#6b7683" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrowMuted)"/>
+  <text class="label-muted" x="778" y="674" text-anchor="middle">room + members + resume_token</text>
+
+  <line x1="650" y1="726" x2="156" y2="726" stroke="#37c2b8" stroke-width="1.8" marker-end="url(#arrowTeal)"/>
+  <text class="label" x="400" y="716" text-anchor="middle">emit('joined' / 'members') → 房间码、名单</text>
+
+  <line x1="650" y1="768" x2="894" y2="768" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="772" y="758" text-anchor="middle">WebRTC 信令 offer / answer / ICE</text>
+
+  <line x1="650" y1="810" x2="156" y2="810" stroke="#37c2b8" stroke-width="1.8" marker-end="url(#arrowTeal)"/>
+  <text class="label" x="400" y="800" text-anchor="middle">emit('peer-state') → P2P / TURN / 重连中</text>
+
+  <line x1="400" y1="860" x2="644" y2="860" stroke="#ff7a45" stroke-width="1.8" marker-end="url(#arrowOrange)"/>
+  <text class="label" x="522" y="850" text-anchor="middle">每帧 setSelfPosition(x, y)</text>
+
+  <line x1="650" y1="902" x2="894" y2="902" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="772" y="892" text-anchor="middle">DataChannel 'move' · 不可靠 · 50ms</text>
+
+  <line x1="900" y1="944" x2="656" y2="944" stroke="#6b7683" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrowMuted)"/>
+  <text class="label-muted" x="778" y="934" text-anchor="middle">对方 'move' → 更新 tx / ty</text>
+
+  <line x1="150" y1="986" x2="644" y2="986" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="397" y="976" text-anchor="middle">每帧 render() 读取 players</text>
+
+  <line x1="650" y1="1028" x2="894" y2="1028" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="772" y="1018" text-anchor="middle">peer-ready → 可靠快照（一次）</text>
+
+  <line x1="150" y1="1076" x2="644" y2="1076" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="397" y="1066" text-anchor="middle">leave()</text>
+
+  <line x1="650" y1="1118" x2="894" y2="1118" stroke="#8b96a3" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text class="label" x="772" y="1108" text-anchor="middle">POST /v1/rooms/{code}/leave</text>
+
+  <line x1="650" y1="1160" x2="156" y2="1160" stroke="#37c2b8" stroke-width="1.8" marker-end="url(#arrowTeal)"/>
+  <text class="label" x="400" y="1150" text-anchor="middle">emit('left') → 回到大厅</text>
+
+  <text class="label-muted" x="50" y="1240">位置同步是持续循环：每帧 game 推位置 → sdk 50ms 上报 → 对端 sdk 更新 → ui 每帧插值绘制</text>
+</svg>
