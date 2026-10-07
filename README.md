@@ -17,11 +17,14 @@ server.md 和 sdk.md 只描述当前功能，版本历史集中在 releasenote.m
 
 - `server/`：Rust/Axum 信令、coturn STUN/TURN、MongoDB 持久化及部署配置。
 - `sdk/`：JavaScript/TypeScript、Godot、Rust 客户端实现。
+- `sample/`：示例页面与演示素材（包含 `diagram.svg` 架构图、`未命名.mp4` 演示视频，以及 `index.html`、`sdk.js`、`game.js`、`ui.js`、`style.css` 示例代码）。
+
 ## 示例
 
 ### 结构图
+
 ![GameLink 结构图](assets/structure.svg)
 
 ### 演示
-![GameLink 演示](assets/demo.gif)
 
+![GameLink 演示](assets/demo.gif)
